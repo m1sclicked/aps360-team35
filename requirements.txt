@@ -1,0 +1,9 @@
+torch>=1.10.0
+torchvision
+numpy
+scikit-learn
+tqdm
+opencv-python
+mediapipe
+matplotlib
+kaggle
