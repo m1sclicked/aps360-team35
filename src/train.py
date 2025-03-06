@@ -1,5 +1,6 @@
 import torch
-
+import numpy as np
+from sklearn.metrics import accuracy_score
 
 def train_model(
     model,
@@ -90,3 +91,66 @@ def train_model(
         print("-" * 50)
 
     return train_losses, val_losses, val_accuracies, test_accuracies
+
+def train_svm_model(model, train_loader, val_loader, test_loader, criterion=None, optimizer=None, num_epochs=None, device=None):
+    """
+    Train a scikit-learn SVM model using data from PyTorch DataLoaders
+    
+    Args:
+        model: GestureSVM instance
+        train_loader: DataLoader for training data
+        val_loader: DataLoader for validation data
+        test_loader: DataLoader for test data
+        criterion, optimizer, num_epochs, device: Kept for API compatibility, not used
+        
+    Returns:
+        train_losses: List of training losses (will contain placeholder values)
+        val_losses: List of validation losses (will contain placeholder values)
+        val_accuracies: List of validation accuracies
+        test_accuracies: List of test accuracies
+    """
+    print("Extracting data from dataloaders...")
+    
+    # Extract data from data loaders
+    X_train = []
+    y_train = []
+    for features, labels in train_loader:
+        X_train.append(features.numpy())
+        y_train.append(labels.numpy())
+    
+    X_train = np.vstack(X_train)
+    y_train = np.concatenate(y_train)
+    
+    # Train SVM model
+    model.fit(X_train, y_train)
+    
+    # Evaluate on validation set
+    X_val = []
+    y_val = []
+    for features, labels in val_loader:
+        X_val.append(features.numpy())
+        y_val.append(labels.numpy())
+    
+    X_val = np.vstack(X_val)
+    y_val = np.concatenate(y_val)
+    val_predictions = model.predict(X_val)
+    val_accuracy = np.mean(val_predictions == y_val) * 100
+    
+    # Evaluate on test set
+    X_test = []
+    y_test = []
+    for features, labels in test_loader:
+        X_test.append(features.numpy())
+        y_test.append(labels.numpy())
+    
+    X_test = np.vstack(X_test)
+    y_test = np.concatenate(y_test)
+    test_predictions = model.predict(X_test)
+    test_accuracy = np.mean(test_predictions == y_test) * 100
+    
+    print(f"Validation Accuracy: {val_accuracy:.2f}%")
+    print(f"Test Accuracy: {test_accuracy:.2f}%")
+    
+    # Return dummy losses and actual accuracies
+    # This maintains compatibility with the CNN training interface
+    return [0.0], [0.0], [val_accuracy], [test_accuracy]
