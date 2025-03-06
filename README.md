@@ -14,7 +14,7 @@ This project focuses on **Sign Language Gesture Recognition** using deep learnin
 #### 1. Clone the repository
 ```sh
 git clone <repo-url>
-cd sign-language-gesture-recognition
+cd aps360-team35
 ```
 
 #### 2. Set up the environment
@@ -65,5 +65,4 @@ sign-language-gesture-recognition/
 ```
 
 ---
-Feel free to update this README as necessary!
 
