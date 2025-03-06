@@ -50,18 +50,29 @@ sign-language-gesture-recognition/
 │
 ├── src/
 │   ├── __init__.py
-│   ├── dataset.py
-│   ├── model.py
-│   └── train.py
+│   ├── dataset.py          # Contains GestureDataset class and prepare_dataset/download_wlasl_data functions
+│   ├── cnn_model.py        # Contains GestureCNN class for CNN implementation
+│   ├── svm_model.py        # Contains GestureSVM class for SVM implementation
+│   └── train.py            # Contains train_model and train_svm_model functions
 │
 ├── results/
-│   ├── models/
-│   ├── logs/
-│   └── plots/
+│   ├── cnn/                # Results specific to CNN model (created by main.py)
+│   │   └── YYYYMMDD_HHMMSS/  # Timestamp folders for each run
+│   │       ├── models/     # Saved model files
+│   │       ├── logs/       # Training logs and metrics
+│   │       └── plots/      # Visualizations of training progress
+│   │
+│   ├── svm/                # Results specific to SVM model (created by main.py)
+│   │   └── YYYYMMDD_HHMMSS/  # Timestamp folders for each run
+│   │       ├── models/     # Saved model files
+│   │       ├── logs/       # Training logs and metrics
+│   │       └── plots/      # Visualizations and parameter search results
+│   │
+│   └── unknown/            # For any other model types (created by main.py)
 │
 ├── requirements.txt
 ├── README.md
-└── main.py
+└── main.py                 # Main script with save_results function and main() function
 ```
 
 ---
