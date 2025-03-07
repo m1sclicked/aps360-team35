@@ -34,10 +34,31 @@ python main.py
 ```
 
 ## Dataset Preparation
-- **Trained Model:** `results/models/gesture_model.pth`
-- **Scaler:** `results/models/gesture_scaler.npy`
-- **Training Plots:** `results/plots/training_progress.png`
-- **Training Logs:** `results/logs/training_results.txt`
+
+### Model Storage
+- **CNN Model:** `results/cnn/YYYYMMDD_HHMMSS/models/cnn_model.pth`
+- **SVM Model:** `results/svm/YYYYMMDD_HHMMSS/models/svm_model.pkl`
+- **Scaler:** 
+  - CNN: `results/cnn/YYYYMMDD_HHMMSS/models/cnn_scaler.pkl`
+  - SVM: `results/svm/YYYYMMDD_HHMMSS/models/svm_scaler.pkl`
+  
+### Training Artifacts
+- **CNN Training Plots:** `results/cnn/YYYYMMDD_HHMMSS/plots/cnn_training_progress.png`
+- **SVM Parameter Search Plots:** `results/svm/YYYYMMDD_HHMMSS/plots/svm_parameter_search.png`
+- **SVM Learning Curves:** `results/svm/YYYYMMDD_HHMMSS/plots/svm_learning_curves.png`
+
+### Metrics and Logs
+- **CNN Training Results:** `results/cnn/YYYYMMDD_HHMMSS/logs/cnn_training_results.txt`
+- **SVM Training Results:** `results/svm/YYYYMMDD_HHMMSS/logs/svm_training_results.txt`
+- **Metrics CSV:** 
+  - CNN: `results/cnn/YYYYMMDD_HHMMSS/logs/cnn_metrics.csv`
+  - SVM: `results/svm/YYYYMMDD_HHMMSS/logs/svm_metrics.csv`
+  
+### Summary Files
+- **CNN Summary:** `results/cnn/YYYYMMDD_HHMMSS/cnn_summary.json`
+- **SVM Summary:** `results/svm/YYYYMMDD_HHMMSS/svm_summary.json`
+
+*Note: YYYYMMDD_HHMMSS represents the timestamp when the model was trained (e.g., 20250306_181739)*
 
 ## Project Structure
 ```

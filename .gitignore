@@ -17,3 +17,6 @@ venv/
 
 # Ignore Jupyter Notebook checkpoints (if applicable)
 .ipynb_checkpoints/
+
+#ignore preprocessed
+preprocessed/
