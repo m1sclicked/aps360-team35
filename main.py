@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-def save_results(model, train_losses, val_losses, val_accuracies, test_accuracies, scaler, config, base_dir="results", grid_search_results=None):
+def save_results(model, train_losses, val_losses, val_accuracies, test_accuracies, scaler, config, base_dir="results", grid_search_results=None, y_true=None, y_pred=None):
     """
     Save all results to appropriate directories based on model type.
     
@@ -28,6 +28,8 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
         config: Configuration dictionary
         base_dir: Base directory for results
         grid_search_results: Optional GridSearchCV results for SVM plotting
+        y_true: Ground truth labels for confusion matrix
+        y_pred: Predicted labels for confusion matrix
     
     Returns:
         dict: Paths to saved files
@@ -39,6 +41,7 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
     import pickle
     import json
     from datetime import datetime
+    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
     
     # Identify model type
     is_torch_model = hasattr(model, 'state_dict') and callable(getattr(model, 'state_dict'))
@@ -226,7 +229,69 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
         plt.close()
         saved_paths['plots'] = plots_path
     
-    # 2. Save metrics as CSV
+    # 2. Generate and save confusion matrix if provided with true and predicted labels
+    if y_true is not None and y_pred is not None:
+        plt.figure(figsize=(10, 8))
+        cm = confusion_matrix(y_true, y_pred)
+        
+        # Get class names if available in config
+        class_names = config.get('class_names', [f'Class {i}' for i in range(config['num_classes'])])
+        
+        # Create confusion matrix display
+        disp = ConfusionMatrixDisplay(
+            confusion_matrix=cm,
+            display_labels=class_names if len(class_names) == config['num_classes'] else None
+        )
+        
+        # Plot with colorbar and labels
+        disp.plot(cmap='Blues', values_format='d', ax=plt.gca())
+        
+        # Adjust layout
+        plt.title(f'{model_type.upper()} Confusion Matrix')
+        plt.tight_layout()
+        
+        # Save the figure
+        cm_path = os.path.join(plots_dir, f"{model_type}_confusion_matrix.png")
+        plt.savefig(cm_path)
+        plt.close()
+        saved_paths['confusion_matrix'] = cm_path
+        
+        # Also save confusion matrix data as CSV
+        cm_csv_path = os.path.join(logs_dir, f"{model_type}_confusion_matrix.csv")
+        with open(cm_csv_path, 'w') as f:
+            # Write header with class names
+            if len(class_names) == config['num_classes']:
+                f.write("," + ",".join(class_names) + "\n")
+            else:
+                f.write("," + ",".join([f'Class {i}' for i in range(config['num_classes'])]) + "\n")
+            
+            # Write confusion matrix rows
+            for i, row in enumerate(cm):
+                if i < len(class_names):
+                    f.write(f"{class_names[i]}," + ",".join(map(str, row)) + "\n")
+                else:
+                    f.write(f"Class {i}," + ",".join(map(str, row)) + "\n")
+                    
+        saved_paths['confusion_matrix_csv'] = cm_csv_path
+        
+        # Calculate and save classification metrics per class
+        from sklearn.metrics import precision_recall_fscore_support
+        
+        # Calculate precision, recall, and F1-score for each class
+        precision, recall, f1, support = precision_recall_fscore_support(y_true, y_pred)
+        
+        # Save metrics to CSV
+        metrics_per_class_path = os.path.join(logs_dir, f"{model_type}_class_metrics.csv")
+        with open(metrics_per_class_path, 'w') as f:
+            f.write("class,precision,recall,f1_score,support\n")
+            
+            for i in range(len(precision)):
+                class_name = class_names[i] if i < len(class_names) else f"Class {i}"
+                f.write(f"{class_name},{precision[i]:.4f},{recall[i]:.4f},{f1[i]:.4f},{support[i]}\n")
+                
+        saved_paths['class_metrics'] = metrics_per_class_path
+    
+    # 3. Save metrics as CSV
     metrics_df_path = os.path.join(logs_dir, f"{model_type}_metrics.csv")
     with open(metrics_df_path, 'w') as f:
         f.write("epoch,train_loss,val_loss,val_accuracy,test_accuracy\n")
@@ -244,7 +309,7 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
     
     saved_paths['metrics_csv'] = metrics_df_path
     
-    # 3. Save model with metrics
+    # 4. Save model with metrics
     metrics = {
         'final_test_accuracy': test_accuracies[-1] if test_accuracies else None,
         'final_val_accuracy': val_accuracies[-1] if val_accuracies else None,
@@ -293,14 +358,14 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
     
     saved_paths['model'] = model_path
     
-    # 4. Save scaler
+    # 5. Save scaler
     scaler_path = os.path.join(models_dir, f"{model_type}_scaler.pkl")
     with open(scaler_path, 'wb') as f:
         pickle.dump(scaler, f)
     
     saved_paths['scaler'] = scaler_path
     
-    # 5. Log results
+    # 6. Log results
     log_path = os.path.join(logs_dir, f"{model_type}_training_results.txt")
     with open(log_path, 'w') as f:
         f.write(
@@ -320,7 +385,7 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
     
     saved_paths['log'] = log_path
     
-    # 6. Create a summary file for easy reference
+    # 7. Create a summary file for easy reference
     summary_path = os.path.join(result_dir, f"{model_type}_summary.json")
     with open(summary_path, 'w') as f:
         summary = {
@@ -349,8 +414,8 @@ def main():
     # Configuration
     config = {
         "num_classes": 10,
-        "min_samples_per_class": 5,
-        "max_samples_per_class": 100,
+        "min_samples_per_class": 1,
+        "max_samples_per_class": 50,
         "batch_size": 16,
         "num_epochs": 200,
         "learning_rate": 0.001,
@@ -377,6 +442,36 @@ def main():
         num_classes=config["num_classes"],
         min_videos_per_class=config["min_samples_per_class"],
     )
+
+    # Get class names if available
+    try:
+        import json
+        with open(os.path.join(config["data_path"], "WLASL_v0.3.json"), 'r') as f:
+            wlasl_json = json.load(f)
+        
+        # Extract class names based on the selected classes
+        unique_labels = sorted(list(set(labels)))
+        class_names = []
+        
+        # First, create a mapping of indices to glosses
+        gloss_mapping = {}
+        for i, entry in enumerate(wlasl_json):
+            gloss_mapping[i] = entry['gloss']
+        
+        # Now map the class labels to glosses
+        for label in unique_labels:
+            if label < len(gloss_mapping):
+                class_names.append(gloss_mapping[label])
+            else:
+                # If we couldn't find a name, use a placeholder
+                class_names.append(f"Class_{label}")
+        
+        config["class_names"] = class_names
+        print(f"Found class names: {class_names}")
+    except Exception as e:
+        print(f"Could not extract class names: {e}")
+        # Create generic class names
+        config["class_names"] = [f"Class_{i}" for i in range(config["num_classes"])]
 
     # Split dataset
     X_temp, X_test, y_temp, y_test = train_test_split(
@@ -429,12 +524,17 @@ def main():
             cv=5
         )
 
+        # Get predictions for confusion matrix
+        y_true = y_test
+        y_pred = model.predict(X_test)
+
         # Save results with the grid search visualizations
         config = {
             'model_type': 'svm',
             'num_classes': 10,
             'input_dim': X_train.shape[1],
-            'best_params': model.grid_search_results.best_params_
+            'best_params': model.grid_search_results.best_params_,
+            'class_names': config.get("class_names", [f"Class_{i}" for i in range(config["num_classes"])])
         }
 
         train_losses = model.train_losses
@@ -442,7 +542,7 @@ def main():
         val_accuracies = model.val_accuracies
         test_accuracies = model.test_accuracies
         
-        # Save results with the grid search visualizations
+        # Save results with the grid search visualizations and confusion matrix
         saved_paths = save_results(
             model=model,
             train_losses=train_losses,
@@ -451,7 +551,9 @@ def main():
             test_accuracies=test_accuracies,
             scaler=scaler,
             config=config,
-            grid_search_results=model.grid_search_results
+            grid_search_results=model.grid_search_results,
+            y_true=y_true,
+            y_pred=y_pred
         )
     else:
         print("Using CNN model...")
@@ -473,6 +575,22 @@ def main():
             device,
         )
         
+        # Get predictions for confusion matrix
+        y_true = []
+        y_pred = []
+        
+        model.eval()
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                
+                outputs = model(inputs)
+                _, predictions = torch.max(outputs, 1)
+                
+                y_true.extend(labels.cpu().numpy())
+                y_pred.extend(predictions.cpu().numpy())
+        
         # Save all results using our new function
         saved_paths = save_results(
             model=model,
@@ -481,7 +599,9 @@ def main():
             val_accuracies=val_accuracies,
             test_accuracies=test_accuracies,
             scaler=scaler,
-            config=config
+            config=config,
+            y_true=y_true,
+            y_pred=y_pred
         )
 
     print("Training complete. Check results folder for outputs.")
