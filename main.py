@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 from src.cnn_model import GestureCNN
 from src.svm_model import GestureSVM
-from src.dataset import prepare_dataset, GestureDataset, download_wlasl_data
+from src.dataset import integrated_prepare_dataset, GestureDataset, download_wlasl_data
 from src.train import train_model, train_svm_model
 
 import torch.nn as nn
@@ -349,7 +349,8 @@ def main():
     # Configuration
     config = {
         "num_classes": 10,
-        "samples_per_class": 50,
+        "min_samples_per_class": 5,
+        "max_samples_per_class": 100,
         "batch_size": 32,
         "num_epochs": 25,
         "learning_rate": 0.001,
@@ -370,11 +371,10 @@ def main():
 
     # Prepare dataset
     print(f"Step 2: Preparing dataset with {config['num_classes']} classes...")
-    features, labels = prepare_dataset(
-        wlasl_data,
+    features, labels = integrated_prepare_dataset(
         data_path=config["data_path"],
         num_classes=config["num_classes"],
-        max_samples_per_class=config["samples_per_class"],
+        min_videos_per_class=config["min_samples_per_class"],
     )
 
     # Split dataset
@@ -407,7 +407,7 @@ def main():
     print(f"Using device: {device}")
     
     # Choose model type (SVM or CNN)
-    use_svm = True  # Set to False to use CNN instead
+    use_svm = False  # Set to False to use CNN instead
     
     if use_svm:
         print("Using SVM model...")
