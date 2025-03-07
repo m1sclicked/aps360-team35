@@ -351,15 +351,16 @@ def main():
         "num_classes": 10,
         "min_samples_per_class": 5,
         "max_samples_per_class": 100,
-        "batch_size": 32,
-        "num_epochs": 25,
+        "batch_size": 16,
+        "num_epochs": 200,
         "learning_rate": 0.001,
         "data_path": "data/wlasl_data",
     }
 
     # Set random seeds for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
+    torch.cuda.manual_seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # Download/load dataset
     print("Step 1: Loading WLASL dataset...")

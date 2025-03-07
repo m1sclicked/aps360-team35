@@ -36,7 +36,7 @@ class GestureCNN(nn.Module):
 
         # fully connected layers
         self.fc_layers = nn.Sequential(
-            nn.Linear(512, 128), nn.ReLU(), nn.Dropout(0.7), nn.Linear(128, num_classes)
+            nn.Linear(512, 128), nn.ReLU(), nn.Dropout(0.5), nn.Linear(128, num_classes)
         )
 
     def forward(self, x):
