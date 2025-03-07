@@ -1,21 +1,13 @@
 import sys 
 import platform 
-import numpy as np 
 print('System Diagnostics:') 
 print(f'Python: {sys.version}') 
 print(f'Platform: {platform.platform()}') 
-print(f'NumPy: {np.__version__}') 
 try: 
-    import protobuf 
-    print(f'Protobuf: {protobuf.__version__}') 
-except (ImportError, AttributeError): 
-    import google.protobuf 
-    print(f'Protobuf: {google.protobuf.__version__}') 
-try: 
-    import flatbuffers 
-    print(f'Flatbuffers: {flatbuffers.__version__ if hasattr(flatbuffers, "__version__") else "Unknown"}') 
+    import numpy as np 
+    print(f'\nNumPy Version: {np.__version__}') 
 except ImportError as e: 
-    print(f'Flatbuffers Import Error: {e}') 
+    print(f'NumPy Import Error: {e}') 
 try: 
     import torch 
     print('\nPyTorch Information:') 
@@ -30,15 +22,22 @@ try:
     import tensorflow as tf 
     print('\nTensorFlow Information:') 
     print(f'Version: {tf.__version__}') 
-    gpus = tf.config.list_physical_devices('GPU') 
-    print(f'GPU Devices: {gpus}') 
+    print('Checking DirectML availability...') 
+    try: 
+        from tensorflow.python.framework.errors_impl import NotFoundError 
+        try: 
+            print(f'Available GPU devices: {tf.config.list_physical_devices("GPU")}') 
+            print(f'Available DirectML devices: {tf.config.list_physical_devices("DML")}') 
+            with tf.device('DML:0'): 
+                a = tf.constant([[1.0, 2.0], [3.0, 4.0]]) 
+                b = tf.constant([[1.0, 1.0], [1.0, 1.0]]) 
+                c = tf.matmul(a, b) 
+            print('DirectML test: Successful matrix multiplication using DirectML') 
+        except NotFoundError as e: 
+            print(f'DirectML device error: {e}') 
+        except Exception as e: 
+            print(f'DirectML test error: {e}') 
+    except ImportError as e: 
+        print(f'DirectML plugin import error: {e}') 
 except ImportError as e: 
     print(f'TensorFlow Import Error: {e}') 
-except Exception as e: 
-    print(f'TensorFlow Error: {e}') 
-try: 
-    import mediapipe as mp 
-    print('\nMediaPipe Information:') 
-    print(f'Version: {mp.__version__}') 
-except ImportError as e: 
-    print(f'MediaPipe Import Error: {e}') 
