@@ -111,16 +111,34 @@ def download_wlasl_data(data_path="data/wlasl_data", download=False):
     print("Dataset not found. Use download=True to fetch the dataset.")
     return None
 
-# Initialize OpenPose
-def initialize_openpose(model_path="models/openpose"):
+def check_cuda_availability():
     """
-    Initialize OpenPose model
+    Check if CUDA is available for OpenCV DNN
+    
+    Returns:
+        bool: True if CUDA is available, False otherwise
+    """
+    # Check if CUDA is available in OpenCV
+    if cv.cuda.getCudaEnabledDeviceCount() > 0:
+        print(f"CUDA is available with {cv.cuda.getCudaEnabledDeviceCount()} device(s)")
+        return True
+    else:
+        print("CUDA is not available in OpenCV")
+        return False
+
+
+# Initialize OpenPose
+def initialize_openpose(model_path="models/openpose", use_gpu=True):
+    """
+    Initialize OpenPose model with GPU support if available
     
     Args:
         model_path (str): Path to OpenPose models
+        use_gpu (bool): Whether to use GPU acceleration
         
     Returns:
-        net: The OpenPose model
+        net: The OpenPose body model
+        hand_net: The OpenPose hand model
         input_width, input_height: Input dimensions for the model
     """
     # Check if model folder exists
@@ -146,8 +164,19 @@ def initialize_openpose(model_path="models/openpose"):
     # Body model
     net = cv.dnn.readNetFromCaffe(proto_file, weights_file)
     
-    # Hand model (separate for left and right)
+    # Hand model
     hand_net = cv.dnn.readNetFromCaffe(hand_proto, hand_weights)
+    
+    # Try to use GPU if requested
+    if use_gpu and check_cuda_availability():
+        print("Using CUDA acceleration for OpenPose")
+        net.setPreferableBackend(cv.dnn.DNN_BACKEND_CUDA)
+        net.setPreferableTarget(cv.dnn.DNN_TARGET_CUDA)
+        
+        hand_net.setPreferableBackend(cv.dnn.DNN_BACKEND_CUDA)
+        hand_net.setPreferableTarget(cv.dnn.DNN_TARGET_CUDA)
+    else:
+        print("Using CPU for OpenPose")
     
     input_width, input_height = 368, 368  # Default OpenPose input size
     
@@ -382,7 +411,7 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
     """
     # Initialize OpenPose
     try:
-        net, hand_net, input_width, input_height = initialize_openpose()
+        net, hand_net, input_width, input_height = initialize_openpose(use_gpu=True)
     except FileNotFoundError as e:
         print(f"OpenPose initialization failed: {e}")
         print("Please download OpenPose models and place them in the models/openpose directory.")
@@ -468,7 +497,7 @@ def preprocess_wlasl_dataset_openpose(data_path="data/wlasl_data", output_path="
     # Initialize OpenPose
     print("Initializing OpenPose...")
     try:
-        net, hand_net, input_width, input_height = initialize_openpose()
+        net, hand_net, input_width, input_height = initialize_openpose(use_gpu=True)
         print("OpenPose initialized successfully")
     except FileNotFoundError as e:
         print(f"OpenPose initialization failed: {e}")

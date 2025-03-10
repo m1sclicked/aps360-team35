@@ -415,7 +415,7 @@ def main():
     config = {
         "num_classes": 10,
         "min_samples_per_class": 1,
-        "max_samples_per_class": 50,
+        "max_samples_per_class": 1000,
         "batch_size": 16,
         "num_epochs": 200,
         "learning_rate": 0.001,
