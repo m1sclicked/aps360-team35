@@ -30,7 +30,7 @@ class ImprovedGestureCNN(nn.Module):
         super(ImprovedGestureCNN, self).__init__()
         
         # Initial convolution
-        self.conv1 = nn.Conv1d(1, 64, kernel_size=7, stride=2, padding=3)
+        self.conv1 = nn.Conv1d(1, 64, kernel_size=5, stride=2, padding=3)
         self.bn1 = nn.BatchNorm1d(64)
         self.pool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
         

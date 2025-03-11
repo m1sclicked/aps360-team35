@@ -34,7 +34,7 @@ def main():
         "num_epochs": 200,
         "learning_rate": 0.001,
         "data_path": "data/wlasl_data",
-        "use_data_augmentation": False,
+        "use_data_augmentation": True,
     }
 
     # Set random seeds for reproducibility

@@ -55,12 +55,18 @@ class GestureDataset(Dataset):
 
 def download_wlasl_data(data_path="data/wlasl_data", download=False):
     """
-    Locally load or download WLASL dataset
-
+    Locally load or download WLASL dataset from the updated Kaggle source
+    
     Args:
         data_path (str): Path to save the dataset
         download (bool): Whether to attempt downloading the dataset
     """
+    import os
+    import json
+    import subprocess
+    import zipfile
+    import shutil
+    
     os.makedirs(data_path, exist_ok=True)
 
     json_path = os.path.join(data_path, "WLASL_v0.3.json")
@@ -74,37 +80,118 @@ def download_wlasl_data(data_path="data/wlasl_data", download=False):
     # If download is requested
     if download:
         try:
-            # Download dataset using Kaggle CLI
+            # Download dataset using Kaggle CLI with the updated source
             download_cmd = [
                 "kaggle",
                 "datasets",
                 "download",
                 "-d",
-                "risangbaskoro/wlasl-processed",
+                "sttaseen/wlasl2000-resized",
                 "-p",
                 data_path,
             ]
+            print("Downloading WLASL dataset from sttaseen/wlasl2000-resized...")
             subprocess.run(download_cmd, check=True)
 
             # Unzip the downloaded file
-            zip_path = os.path.join(data_path, "wlasl-processed.zip")
+            zip_path = os.path.join(data_path, "wlasl2000-resized.zip")
+            print(f"Extracting dataset from {zip_path}...")
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(data_path)
 
             # Remove the zip file
             os.remove(zip_path)
+            print("Extraction complete, zip file removed.")
 
-            # Load the JSON
-            with open(json_path, "r") as f:
-                wlasl_data = json.load(f)
-
-            return wlasl_data
+            # Based on your feedback, the files were extracted to data/wlasl_data/wlasl complete
+            # Let's check if "wlasl complete" directory exists
+            wlasl_complete_dir = os.path.join(data_path, "wlasl complete")
+            
+            if os.path.exists(wlasl_complete_dir):
+                print(f"Found 'wlasl complete' directory at {wlasl_complete_dir}")
+                
+                # Check for JSON file in the wlasl complete directory
+                json_in_subdir = os.path.join(wlasl_complete_dir, "WLASL_v0.3.json")
+                
+                if os.path.exists(json_in_subdir):
+                    # Copy JSON file to expected location
+                    shutil.copy(json_in_subdir, json_path)
+                    print(f"Copied JSON file from {json_in_subdir} to {json_path}")
+                    
+                    # Now check for videos directory and handle it
+                    videos_subdir = os.path.join(wlasl_complete_dir, "videos")
+                    videos_target = os.path.join(data_path, "videos")
+                    
+                    if os.path.exists(videos_subdir):
+                        # If videos directory exists in wlasl_data, move to correct location
+                        if not os.path.exists(videos_target):
+                            print(f"Moving videos from {videos_subdir} to {videos_target}")
+                            shutil.move(videos_subdir, videos_target)
+                        else:
+                            # If target already exists, copy files that don't exist
+                            print(f"Merging videos from {videos_subdir} to {videos_target}")
+                            for filename in os.listdir(videos_subdir):
+                                src_file = os.path.join(videos_subdir, filename)
+                                dst_file = os.path.join(videos_target, filename)
+                                if not os.path.exists(dst_file) and os.path.isfile(src_file):
+                                    shutil.copy2(src_file, dst_file)
+                else:
+                    print(f"Could not find WLASL_v0.3.json in the 'wlasl complete' directory.")
+                    # Try to find it anywhere in the directory structure
+                    for root, dirs, files in os.walk(data_path):
+                        if "WLASL_v0.3.json" in files:
+                            found_json = os.path.join(root, "WLASL_v0.3.json")
+                            shutil.copy(found_json, json_path)
+                            print(f"Found and copied JSON from {found_json} to {json_path}")
+                            break
+            
+            # Check for more nested directories that might contain the JSON
+            potential_subdirs = ["wlasl complete", "WLASL", "wlasl", "wlasl2000"]
+            for subdir in potential_subdirs:
+                potential_dir = os.path.join(data_path, subdir)
+                if os.path.exists(potential_dir):
+                    potential_json = os.path.join(potential_dir, "WLASL_v0.3.json")
+                    if os.path.exists(potential_json):
+                        shutil.copy(potential_json, json_path)
+                        print(f"Found and copied JSON from {potential_json} to {json_path}")
+                        break
+            
+            # Load the JSON if it exists now
+            if os.path.exists(json_path):
+                with open(json_path, "r") as f:
+                    wlasl_data = json.load(f)
+                print(f"Successfully loaded WLASL data with {len(wlasl_data)} classes.")
+                
+                # Make sure videos directory exists in expected location
+                videos_dir = os.path.join(data_path, "videos")
+                if not os.path.exists(videos_dir):
+                    print("WARNING: videos directory not found in expected location.")
+                    # Look for videos directory
+                    for root, dirs, files in os.walk(data_path):
+                        if "videos" in dirs:
+                            videos_src = os.path.join(root, "videos")
+                            print(f"Found videos directory at {videos_src}")
+                            if not os.path.exists(videos_dir):
+                                print(f"Moving videos to {videos_dir}")
+                                shutil.move(videos_src, videos_dir)
+                            break
+                
+                return wlasl_data
+            else:
+                print(f"Could not find WLASL_v0.3.json in the extracted files.")
+                return None
 
         except subprocess.CalledProcessError:
             print("Failed to download dataset. Check your Kaggle API credentials.")
+            print("Make sure you have installed the Kaggle CLI and configured your API key:")
+            print("1. Install Kaggle: pip install kaggle")
+            print("2. Get your API key from kaggle.com/account")
+            print("3. Place the kaggle.json file in ~/.kaggle/")
             return None
         except Exception as e:
             print(f"Error downloading dataset: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     # If download not requested and dataset not found
