@@ -262,7 +262,7 @@ def extract_keypoints_openpose(frame, net, hand_net, input_width=368, input_heig
         return features
     return None
 
-def get_hand_roi(frame, wrist_pos, roi_size=200):
+def get_hand_roi(frame, wrist_pos, roi_size=250):
     """
     Extract a region of interest around a hand based on wrist position
     
@@ -366,7 +366,7 @@ def process_video_openpose(video_path, net, hand_net, input_width=368, input_hei
             frame_count += 1
             
             # Skip frames for efficiency (process every 5th frame)
-            if frame_count % 5 != 0:
+            if frame_count % 2 != 0:
                 continue
 
             # Process the frame with OpenPose

@@ -9,6 +9,7 @@ def train_model(
     test_loader,
     criterion,
     optimizer,
+    scheduler,
     num_epochs,
     device,
 ):
@@ -89,6 +90,9 @@ def train_model(
         print(f"Val Accuracy: {val_accuracy:.2f}%")
         print(f"Test Accuracy: {test_accuracy:.2f}%")
         print("-" * 50)
+
+        if scheduler:
+            scheduler.step(avg_val_loss)
 
     return train_losses, val_losses, val_accuracies, test_accuracies
 
