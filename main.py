@@ -11,6 +11,15 @@ from src.train import train_model, train_svm_model
 from src.augmenter import KeypointAugmenter, apply_data_augmentation, augment_dataset
 from src.save import save_results
 
+#Inception
+from src.Inception import Inception
+import torchvision
+import torchvision.transforms as transforms
+from sklearn.model_selection import RandomizedSearchCV
+from torchvision import models, transforms
+import torch
+from src.Inception import Inception
+
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -24,6 +33,7 @@ def main():
     os.makedirs("results/cnn", exist_ok=True)
     os.makedirs("results/svm", exist_ok=True)
     os.makedirs("results/unknown", exist_ok=True)
+    os.makedirs("results/Inception", exist_ok =True)
 
     # Configuration
     config = {
@@ -102,6 +112,7 @@ def main():
     X_val_scaled = scaler.transform(X_val)
     X_test_scaled = scaler.transform(X_test)
 
+
     if config["use_data_augmentation"]:
         print("Applying data augmentation to training set...")
         X_train_processed, y_train_processed = apply_data_augmentation(X_train, y_train)
@@ -122,12 +133,122 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=config["batch_size"])
     test_loader = DataLoader(test_dataset, batch_size=config["batch_size"])
 
+
     # Setup model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    # Function to train and test the MobileNet model
+    def train_model(model, train_loader, val_loader, test_loader, criterion, optimizer, scheduler, num_epochs, device):
+        # Lists to store metrics for each epoch
+        train_losses = []
+        val_losses = []
+        val_accuracies = []
+        test_accuracies = []
+
+        for epoch in range(num_epochs):
+            model.train()  # Set the model to training mode
+            running_train_loss = 0.0
+
+            # Training loop
+            for inputs, labels in train_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
+
+                # Zero the gradients
+                optimizer.zero_grad()
+
+                # Forward pass
+                outputs = model(inputs)
+
+                # Compute the loss
+                loss = criterion(outputs, labels)
+
+                # Backward pass (gradient calculation)
+                loss.backward()
+
+                # Update parameters
+                optimizer.step()
+
+                # Update the running loss
+                running_train_loss += loss.item()
+
+            # Calculate average training loss for the epoch
+            avg_train_loss = running_train_loss / len(train_loader)
+            train_losses.append(avg_train_loss)
+
+            # Validation phase
+            model.eval()  # Set the model to evaluation mode
+            running_val_loss = 0.0
+            y_true_val = []
+            y_pred_val = []
+
+            with torch.no_grad():  # No need to calculate gradients for validation
+                for inputs, labels in val_loader:
+                    inputs, labels = inputs.to(device), labels.to(device)
+
+                    # Forward pass
+                    outputs = model(inputs)
+
+                    # Calculate loss
+                    loss = criterion(outputs, labels)
+                    running_val_loss += loss.item()
+
+                    # Calculate predictions
+                    _, predicted = torch.max(outputs, 1)
+
+                    y_true_val.extend(labels.cpu().numpy())
+                    y_pred_val.extend(predicted.cpu().numpy())
+
+            # Calculate average validation loss for the epoch
+            avg_val_loss = running_val_loss / len(val_loader)
+            val_losses.append(avg_val_loss)
+
+            # Calculate accuracy on validation set
+            val_accuracy = accuracy_score(y_true_val, y_pred_val)
+            val_accuracies.append(val_accuracy)
+
+            # If a learning rate scheduler is defined, step it
+            scheduler.step(avg_val_loss)
+
+            # Optionally, print statistics
+            print(f"Epoch [{epoch+1}/{num_epochs}]")
+            print(f"Training Loss: {avg_train_loss:.4f}")
+            print(f"Validation Loss: {avg_val_loss:.4f}")
+            print(f"Validation Accuracy: {val_accuracy:.4f}")
+
+            # Evaluate on the test set after every epoch
+            model.eval()  # Set the model to evaluation mode for testing
+            y_true_test = []
+            y_pred_test = []
+
+            with torch.no_grad():
+                for inputs, labels in test_loader:
+                    inputs, labels = inputs.to(device), labels.to(device)
+
+                    # Forward pass
+                    outputs = model(inputs)
+
+                    # Calculate predictions
+                    _, predicted = torch.max(outputs, 1)
+
+                    y_true_test.extend(labels.cpu().numpy())
+                    y_pred_test.extend(predicted.cpu().numpy())
+
+            # Calculate accuracy on test set
+            test_accuracy = accuracy_score(y_true_test, y_pred_test)
+            test_accuracies.append(test_accuracy)
+
+            print(f"Test Accuracy: {test_accuracy:.4f}")
+
+        return train_losses, val_losses, val_accuracies, test_accuracies
+
+
+
     # Choose model type (SVM or CNN)
     use_svm = False  # Set to False to use CNN instead
+    use_Inception = True
+
+
     
     if use_svm:
         print("Using SVM model...")
@@ -179,6 +300,62 @@ def main():
             y_true=y_true,
             y_pred=y_pred
         )
+ 
+    elif use_Inception:
+        print("Using Inception model...")
+        model = Inception(num_classes=config["num_classes"]).to(device)
+
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5, verbose=True)
+        
+        # Train Inception model
+        train_losses, val_losses, val_accuracies, test_accuracies = train_model(
+            model,
+            train_loader,
+            val_loader,
+            test_loader,
+            criterion,
+            optimizer,
+            scheduler,
+            config["num_epochs"],
+            device,
+        )
+        
+        # Get predictions for confusion matrix
+        y_true = []
+        y_pred = []
+        
+        model.eval()
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                
+                outputs = model(inputs)
+                _, predictions = torch.max(outputs, 1)
+                
+                y_true.extend(labels.cpu().numpy())
+                y_pred.extend(predictions.cpu().numpy())
+        
+        # Save all results using our new function
+        saved_paths = save_results(
+            model=model,
+            train_losses=train_losses,
+            val_losses=val_losses,
+            val_accuracies=val_accuracies,
+            test_accuracies=test_accuracies,
+            scaler=scaler,
+            config=config,
+            y_true=y_true,
+            y_pred=y_pred
+        )
+
+        print("Training complete. Check results folder for outputs.")
+        return model, scaler, config
+
+
+        
     else:
         print("Using CNN model...")
         model = ImprovedGestureCNN(num_classes=config["num_classes"]).to(device)
