@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+
 def main():
     # Create results directories
     os.makedirs("results/cnn", exist_ok=True)
@@ -94,11 +95,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    if config["new_resnet_cnn"]:
-        print("Using New ResNet for Transfer Learning...")
-        from src.new_resnet_cnn import ResNetGesture
-        model = ResNetGesture(num_classes=config["num_classes"], pretrained=True, freeze_layers=config["freeze_resnet"]).to(device)
-    # ... rest of your training code ...
+    # if config["new_resnet_cnn"]:
+    #     print("Using New ResNet for Transfer Learning...")
+    #     from src.new_resnet_cnn import ResNetGesture
+    #     model = ResNetGesture(num_classes=config["num_classes"], pretrained=True, freeze_layers=config["freeze_resnet"]).to(device)
+    # # ... rest of your training code ...
 
 
     # Select and train the model based on configuration
@@ -129,9 +130,15 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
-        train_losses, val_losses, val_accuracies, test_accuracies = train_model(
-            model, train_loader, val_loader, test_loader,
-            criterion, optimizer, scheduler, config["num_epochs"], device
+        # train_losses, val_losses, val_accuracies, test_accuracies = train_model(
+        #     model, train_loader, val_loader, test_loader,
+        #     criterion, optimizer, scheduler, config["num_epochs"], device
+        # )
+        train_losses, val_losses, val_accuracies, test_accuracies, \
+        val_precisions, val_recalls, val_f1s, \
+        test_precisions, test_recalls, test_f1s = train_model(
+        model, train_loader, val_loader, test_loader,
+        criterion, optimizer, scheduler, config["num_epochs"], device
         )
         saved_paths = save_results(
             model=model, train_losses=train_losses, val_losses=val_losses,
@@ -168,6 +175,122 @@ if __name__ == "__main__":
 
 
 
+# NEW BUT WEIRD
+# def main():
+#     # Create results directory
+#     os.makedirs("results/resnet_transfer", exist_ok=True)
+
+#     # Configuration settings
+#     config = {
+#         "num_classes": 10,
+#         "batch_size": 32,
+#         "num_epochs": 100,      
+#         "learning_rate": 1e-5,  # Lower LR recommended for fine-tuning
+#         "data_path": "data/wlasl_data",
+#         "use_data_augmentation": True,
+
+#         # Transfer-learning options
+#         "use_resnet_transfer": True,
+#         "freeze_mode": "none",  # 'full', 'partial', or 'none'
+#     }
+
+#     # Seed for reproducibility
+#     torch.manual_seed(42)
+#     torch.cuda.manual_seed_all(42)
+#     torch.backends.cudnn.deterministic = True
+#     torch.backends.cudnn.benchmark = False
+
+#     # Step 1: Download or load the dataset
+#     print("Step 1: Loading WLASL dataset...")
+#     wlasl_data = download_wlasl_data(config["data_path"], download=False)
+#     if wlasl_data is None:
+#         print("Failed to load dataset. Exiting.")
+#         return
+
+#     # Step 2: Prepare the dataset
+#     print(f"Step 2: Preparing dataset with {config['num_classes']} classes...")
+#     features, labels = integrated_prepare_dataset(
+#         data_path=config["data_path"],
+#         num_classes=config["num_classes"],
+#         min_videos_per_class=1,
+#     )
+
+#     # Train/validation/test split
+#     X_temp, X_test, y_temp, y_test = train_test_split(
+#         features, labels, test_size=0.2, random_state=42
+#     )
+#     X_train, X_val, y_train, y_val = train_test_split(
+#         X_temp, y_temp, test_size=0.2, random_state=42
+#     )
+
+#     # Standardize the features
+#     scaler = StandardScaler()
+#     X_train_scaled = scaler.fit_transform(X_train)
+#     X_val_scaled = scaler.transform(X_val)
+#     X_test_scaled = scaler.transform(X_test)
+
+#     # Optional data augmentation
+#     if config["use_data_augmentation"]:
+#         print("Applying data augmentation to training set...")
+#         X_train_aug, y_train_aug = apply_data_augmentation(X_train, y_train)
+#         # Re-scale the augmented data
+#         X_train_scaled = scaler.transform(X_train_aug)
+#         y_train = y_train_aug
+
+#     # Create datasets
+#     train_dataset = GestureDataset(X_train_scaled, y_train)
+#     val_dataset = GestureDataset(X_val_scaled, y_val)
+#     test_dataset = GestureDataset(X_test_scaled, y_test)
+
+#     # Create DataLoaders
+#     train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True)
+#     val_loader = DataLoader(val_dataset, batch_size=config["batch_size"])
+#     test_loader = DataLoader(test_dataset, batch_size=config["batch_size"])
+
+#     # Determine device
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     print(f"Using device: {device}")
+
+#     # Initialize ResNet transfer model
+#     print("Using ResNet for transfer learning...")
+#     model = ResNetGesture(
+#         num_classes=config["num_classes"],
+#         pretrained=True,
+#         freeze_mode=config["freeze_mode"]
+#     ).to(device)
+
+#     # Define loss, optimizer, and LR scheduler
+#     criterion = nn.CrossEntropyLoss()
+#     optimizer = optim.Adam(
+#         filter(lambda p: p.requires_grad, model.parameters()), 
+#         lr=config["learning_rate"]
+#     )
+#     # Example: step down LR every 15 epochs by factor of 0.5
+#     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
+
+#     # Train the model
+#     train_losses, val_losses, val_accuracies, test_accuracies = train_model(
+#         model, train_loader, val_loader, test_loader,
+#         criterion, optimizer, scheduler, config["num_epochs"], device
+#     )
+
+#     # Save training results, confusion matrix, etc.
+#     saved_paths = save_results(
+#         model=model,
+#         train_losses=train_losses,
+#         val_losses=val_losses,
+#         val_accuracies=val_accuracies,
+#         test_accuracies=test_accuracies,
+#         scaler=scaler,
+#         config=config
+#     )
+
+#     print("Training complete. Check the results folder for outputs.")
+#     return model, scaler, config
+
+
+# if __name__ == "__main__":
+#     model, scaler, config = main()
 
 
 
@@ -177,8 +300,7 @@ if __name__ == "__main__":
 
 
 
-
-
+# OLD BUT SEMI-WEIRD
 # import os
 # import torch
 # import numpy as np
