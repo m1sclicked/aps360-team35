@@ -1,4 +1,7 @@
-def save_results(model, train_losses, val_losses, val_accuracies, test_accuracies, scaler, config, base_dir="results", grid_search_results=None, y_true=None, y_pred=None):
+def save_results(model, train_losses, val_losses, val_accuracies, test_accuracies, 
+               scaler, config, base_dir="results", grid_search_results=None, y_true=None, y_pred=None,
+               val_precisions=None, val_recalls=None, val_f1s=None, 
+               test_precisions=None, test_recalls=None, test_f1s=None):
     """
     Save all results to appropriate directories based on model type.
     
@@ -14,6 +17,12 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
         grid_search_results: Optional GridSearchCV results for SVM plotting
         y_true: Ground truth labels for confusion matrix
         y_pred: Predicted labels for confusion matrix
+        val_precisions: List of validation precision scores
+        val_recalls: List of validation recall scores
+        val_f1s: List of validation F1 scores
+        test_precisions: List of test precision scores
+        test_recalls: List of test recall scores
+        test_f1s: List of test F1 scores
     
     Returns:
         dict: Paths to saved files
@@ -34,8 +43,10 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
     # Get timestamp for unique folder naming
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # Determine model subfolder name
-    if is_svm_model:
+    # Determine model subfolder name from config if available, otherwise use default detection
+    if 'model_type' in config:
+        model_type = config['model_type']
+    elif is_svm_model:
         model_type = "svm"
     elif is_torch_model:
         model_type = "cnn"
@@ -43,7 +54,8 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
         model_type = "unknown"
     
     # Create unique result directory with timestamp
-    result_dir = os.path.join(base_dir, model_type, timestamp)
+    # FIX: Use base_dir directly instead of joining with model_type again (model_type is already part of base_dir)
+    result_dir = os.path.join(base_dir, timestamp)
     models_dir = os.path.join(result_dir, "models")
     plots_dir = os.path.join(result_dir, "plots")
     logs_dir = os.path.join(result_dir, "logs")
@@ -187,31 +199,96 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
             plt.close()
             saved_paths['learning_curves'] = curves_path
     else:
-        # Default plotting for CNN or SVM without grid search
-        plt.figure(figsize=(15, 5))
+        # Default plotting for CNN or other models without grid search
         
-        # Losses
-        plt.subplot(1, 3, 1)
+        # Plot loss curves
+        plt.figure(figsize=(10, 6))
         plt.plot(train_losses, label="Train Loss")
         plt.plot(val_losses, label="Validation Loss")
-        plt.title(f"{model_type.upper()} Losses")
+        plt.title(f"{model_type.upper()} Training and Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
         plt.legend()
-        
-        # Validation Accuracy
-        plt.subplot(1, 3, 2)
-        plt.plot(val_accuracies)
-        plt.title(f"{model_type.upper()} Validation Accuracy")
-        
-        # Test Accuracy
-        plt.subplot(1, 3, 3)
-        plt.plot(test_accuracies)
-        plt.title(f"{model_type.upper()} Test Accuracy")
-        
+        plt.grid(True)
         plt.tight_layout()
-        plots_path = os.path.join(plots_dir, f"{model_type}_training_progress.png")
-        plt.savefig(plots_path)
+        loss_plot_path = os.path.join(plots_dir, f"{model_type}_loss_curves.png")
+        plt.savefig(loss_plot_path)
         plt.close()
-        saved_paths['plots'] = plots_path
+        saved_paths['loss_plot'] = loss_plot_path
+        
+        # Plot accuracy curves
+        plt.figure(figsize=(10, 6))
+        plt.plot(val_accuracies, label="Validation Accuracy")
+        plt.plot(test_accuracies, label="Test Accuracy")
+        plt.title(f"{model_type.upper()} Validation and Test Accuracy")
+        plt.xlabel("Epoch")
+        plt.ylabel("Accuracy (%)")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        acc_plot_path = os.path.join(plots_dir, f"{model_type}_accuracy_curves.png")
+        plt.savefig(acc_plot_path)
+        plt.close()
+        saved_paths['accuracy_plot'] = acc_plot_path
+        
+        # Plot precision, recall, F1 if available
+        if all(x is not None for x in [val_precisions, val_recalls, val_f1s, 
+                                      test_precisions, test_recalls, test_f1s]):
+            # Validation metrics
+            plt.figure(figsize=(10, 6))
+            plt.plot(val_precisions, label="Precision")
+            plt.plot(val_recalls, label="Recall")
+            plt.plot(val_f1s, label="F1 Score")
+            plt.title(f"{model_type.upper()} Validation Metrics")
+            plt.xlabel("Epoch")
+            plt.ylabel("Score")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            val_metrics_path = os.path.join(plots_dir, f"{model_type}_validation_metrics.png")
+            plt.savefig(val_metrics_path)
+            plt.close()
+            saved_paths['validation_metrics_plot'] = val_metrics_path
+            
+            # Test metrics
+            plt.figure(figsize=(10, 6))
+            plt.plot(test_precisions, label="Precision")
+            plt.plot(test_recalls, label="Recall")
+            plt.plot(test_f1s, label="F1 Score")
+            plt.title(f"{model_type.upper()} Test Metrics")
+            plt.xlabel("Epoch")
+            plt.ylabel("Score")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            test_metrics_path = os.path.join(plots_dir, f"{model_type}_test_metrics.png")
+            plt.savefig(test_metrics_path)
+            plt.close()
+            saved_paths['test_metrics_plot'] = test_metrics_path
+            
+            # Final metrics comparison
+            plt.figure(figsize=(12, 6))
+            metrics = ['Accuracy', 'Precision', 'Recall', 'F1 Score']
+            val_values = [val_accuracies[-1], val_precisions[-1], val_recalls[-1], val_f1s[-1]]
+            test_values = [test_accuracies[-1], test_precisions[-1], test_recalls[-1], test_f1s[-1]]
+            
+            x = np.arange(len(metrics))
+            width = 0.35
+            
+            plt.bar(x - width/2, val_values, width, label='Validation')
+            plt.bar(x + width/2, test_values, width, label='Test')
+            
+            plt.xticks(x, metrics)
+            plt.ylabel('Score')
+            plt.title(f'{model_type.upper()} Final Metrics Comparison')
+            plt.legend()
+            plt.grid(True, axis='y')
+            plt.tight_layout()
+            
+            metrics_comparison_path = os.path.join(plots_dir, f"{model_type}_metrics_comparison.png")
+            plt.savefig(metrics_comparison_path)
+            plt.close()
+            saved_paths['metrics_comparison'] = metrics_comparison_path
     
     # 2. Generate and save confusion matrix if provided with true and predicted labels
     if y_true is not None and y_pred is not None:
@@ -282,18 +359,43 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
     # 3. Save metrics as CSV
     metrics_df_path = os.path.join(logs_dir, f"{model_type}_metrics.csv")
     with open(metrics_df_path, 'w') as f:
-        f.write("epoch,train_loss,val_loss,val_accuracy,test_accuracy\n")
+        # Create header based on available metrics
+        header = ["epoch", "train_loss", "val_loss", "val_accuracy", "test_accuracy"]
+        if val_precisions is not None:
+            header.extend(["val_precision", "val_recall", "val_f1"])
+        if test_precisions is not None:
+            header.extend(["test_precision", "test_recall", "test_f1"])
+        
+        f.write(",".join(header) + "\n")
         
         # Make sure all lists have the same length
-        max_epochs = max(len(train_losses), len(val_losses), len(val_accuracies), len(test_accuracies))
+        max_epochs = max(
+            len(train_losses), len(val_losses), len(val_accuracies), len(test_accuracies),
+            len(val_precisions or []), len(val_recalls or []), len(val_f1s or []),
+            len(test_precisions or []), len(test_recalls or []), len(test_f1s or [])
+        )
         
         for i in range(max_epochs):
-            train_loss = train_losses[i] if i < len(train_losses) else ""
-            val_loss = val_losses[i] if i < len(val_losses) else ""
-            val_acc = val_accuracies[i] if i < len(val_accuracies) else ""
-            test_acc = test_accuracies[i] if i < len(test_accuracies) else ""
+            row = [str(i)]
+            # Basic metrics
+            row.append(str(train_losses[i]) if i < len(train_losses) else "")
+            row.append(str(val_losses[i]) if i < len(val_losses) else "")
+            row.append(str(val_accuracies[i]) if i < len(val_accuracies) else "")
+            row.append(str(test_accuracies[i]) if i < len(test_accuracies) else "")
             
-            f.write(f"{i},{train_loss},{val_loss},{val_acc},{test_acc}\n")
+            # Additional validation metrics
+            if val_precisions is not None:
+                row.append(str(val_precisions[i]) if i < len(val_precisions) else "")
+                row.append(str(val_recalls[i]) if i < len(val_recalls) else "")
+                row.append(str(val_f1s[i]) if i < len(val_f1s) else "")
+                
+            # Additional test metrics
+            if test_precisions is not None:
+                row.append(str(test_precisions[i]) if i < len(test_precisions) else "")
+                row.append(str(test_recalls[i]) if i < len(test_recalls) else "")
+                row.append(str(test_f1s[i]) if i < len(test_f1s) else "")
+            
+            f.write(",".join(row) + "\n")
     
     saved_paths['metrics_csv'] = metrics_df_path
     
@@ -304,6 +406,21 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
         'final_train_loss': train_losses[-1] if train_losses else None,
         'model_type': model_type
     }
+    
+    # Add precision, recall, and F1 metrics if available
+    if val_precisions is not None:
+        metrics.update({
+            'final_val_precision': val_precisions[-1],
+            'final_val_recall': val_recalls[-1],
+            'final_val_f1': val_f1s[-1],
+        })
+    
+    if test_precisions is not None:
+        metrics.update({
+            'final_test_precision': test_precisions[-1],
+            'final_test_recall': test_recalls[-1],
+            'final_test_f1': test_f1s[-1],
+        })
     
     # If we have grid search results, add them to metrics
     if grid_search_results is not None:
@@ -346,30 +463,48 @@ def save_results(model, train_losses, val_losses, val_accuracies, test_accuracie
     
     saved_paths['model'] = model_path
     
-    # 5. Save scaler
-    scaler_path = os.path.join(models_dir, f"{model_type}_scaler.pkl")
-    with open(scaler_path, 'wb') as f:
-        pickle.dump(scaler, f)
-    
-    saved_paths['scaler'] = scaler_path
+    # 5. Save scaler if provided
+    if scaler is not None:
+        scaler_path = os.path.join(models_dir, f"{model_type}_scaler.pkl")
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(scaler, f)
+        saved_paths['scaler'] = scaler_path
     
     # 6. Log results
     log_path = os.path.join(logs_dir, f"{model_type}_training_results.txt")
     with open(log_path, 'w') as f:
-        f.write(
-            f"""
-        {model_type.upper()} Model Training completed!
-        Final Results:
-        - Test Accuracy: {test_accuracies[-1] if test_accuracies else 'N/A':.2f}%
-        - Validation Accuracy: {val_accuracies[-1] if val_accuracies else 'N/A':.2f}%
-        - Training Loss: {train_losses[-1] if train_losses else 'N/A':.4f}
+        log_text = f"""
+{model_type.upper()} Model Training completed!
+Final Results:
+- Test Accuracy: {test_accuracies[-1] if test_accuracies else 'N/A':.2f}%
+- Validation Accuracy: {val_accuracies[-1] if val_accuracies else 'N/A':.2f}%
+- Training Loss: {train_losses[-1] if train_losses else 'N/A':.4f}
+"""
         
-        Configuration:
-        {json.dumps(config, indent=2)}
+        # Add precision, recall, and F1 metrics if available
+        if val_precisions is not None:
+            log_text += f"""
+Validation Metrics:
+- Precision: {val_precisions[-1]:.4f}
+- Recall: {val_recalls[-1]:.4f}
+- F1 Score: {val_f1s[-1]:.4f}
+"""
         
-        Results saved in: {result_dir}
-        """
-        )
+        if test_precisions is not None:
+            log_text += f"""
+Test Metrics:
+- Precision: {test_precisions[-1]:.4f}
+- Recall: {test_recalls[-1]:.4f}
+- F1 Score: {test_f1s[-1]:.4f}
+"""
+        
+        log_text += f"""
+Configuration:
+{json.dumps(config, indent=2)}
+
+Results saved in: {result_dir}
+"""
+        f.write(log_text)
     
     saved_paths['log'] = log_path
     

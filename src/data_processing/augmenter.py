@@ -430,7 +430,7 @@ def apply_data_augmentation(features, labels, is_sequence=False):
     
     # Generate augmented dataset
     aug_features, aug_labels = augment_dataset(
-        features, labels, augmenter, n_augmentations=3, is_sequence=is_sequence
+        features, labels, augmenter, n_augmentations=15, is_sequence=is_sequence
     )
     
     print(f"Augmented dataset: {len(aug_features)} samples")

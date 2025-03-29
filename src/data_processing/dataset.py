@@ -21,6 +21,68 @@ class GestureDataset(Dataset):
     def __getitem__(self, idx):
         return self.features[idx], self.labels[idx]
 
+class GestureSequenceDataset(Dataset):
+    """Dataset class that handles sequences of gesture features"""
+    def __init__(self, features, labels, seq_length=150, normalize=True):
+        """
+        Args:
+            features: List of variable-length feature sequences, each representing a video
+            labels: List of class labels
+            seq_length: Maximum sequence length (will pad or truncate)
+            normalize: Whether to normalize features
+        """
+        self.seq_length = seq_length
+        self.labels = torch.LongTensor(labels)
+        
+        # Process sequences to have uniform length through padding/truncation
+        self.processed_features = []
+        
+        for sequence in features:
+            processed_seq = self.process_sequence(sequence, self.seq_length, normalize)
+            self.processed_features.append(processed_seq)
+        
+        # Convert to tensor
+        self.processed_features = torch.stack(self.processed_features)
+        
+        # Create attention masks (1 for real data, 0 for padding)
+        self.masks = torch.zeros((len(features), seq_length), dtype=torch.bool)
+        for i, seq in enumerate(features):
+            seq_len = min(len(seq), seq_length)
+            self.masks[i, :seq_len] = 1
+    
+    def process_sequence(self, sequence, max_length, normalize):
+    # Convert to tensor if not already
+        if not isinstance(sequence, torch.Tensor):
+            sequence = torch.FloatTensor(sequence)
+        
+        # Normalize if requested
+        if normalize:
+            # Calculate mean and std across sequence, handling zeros
+            mask = (sequence != 0).float()
+            if mask.sum() > 0:  # Only normalize if there are non-zero values
+                seq_mean = (sequence.sum(dim=0) / (mask.sum(dim=0) + 1e-8))
+                seq_std = torch.sqrt(((sequence - seq_mean)**2 * mask).sum(dim=0) / 
+                                        (mask.sum(dim=0) + 1e-8) + 1e-8)
+                sequence = (sequence - seq_mean) / seq_std
+                sequence = sequence * mask  # Keep zeros as zeros
+        
+        # Handle sequence length
+        seq_len = sequence.size(0)
+        
+        if seq_len >= max_length:
+            # Truncate if sequence is too long
+            return sequence[:max_length]
+        else:
+            # Pad with zeros if sequence is too short
+            padding = torch.zeros((max_length - seq_len, sequence.size(1)), dtype=torch.float32)
+            return torch.cat([sequence, padding], dim=0)
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.processed_features[idx], self.masks[idx], self.labels[idx]
+
 # def initialize_mediapipe():
 #     """
 #     Initialize MediaPipe hand tracking as an alternative to OpenPose
@@ -420,10 +482,20 @@ def process_hand(hand_roi, hand_net, input_width, input_height):
         return hand_keypoints
     return None
 
-def process_video_openpose(video_path, net, hand_net, input_width=368, input_height=368):
+def process_video_openpose(video_path, net, hand_net, input_width=368, input_height=368, sample_rate=2):
     """
     Process a single video to extract hand landmarks using OpenPose
-    Returns None if processing fails or no hands are detected
+    Returns a sequence of features instead of averaging them
+    
+    Args:
+        video_path: Path to the video file
+        net: OpenPose body network
+        hand_net: OpenPose hand network
+        input_width, input_height: Input dimensions for the model
+        sample_rate: Process every nth frame for efficiency
+        
+    Returns:
+        List of feature arrays, one per processed frame
     """
     try:
         cap = cv.VideoCapture(video_path)
@@ -441,8 +513,8 @@ def process_video_openpose(video_path, net, hand_net, input_width=368, input_hei
                 
             frame_count += 1
             
-            # Skip frames for efficiency (process every 5th frame)
-            if frame_count % 2 != 0:
+            # Skip frames for efficiency
+            if frame_count % sample_rate != 0:
                 continue
 
             # Process the frame with OpenPose
@@ -464,8 +536,8 @@ def process_video_openpose(video_path, net, hand_net, input_width=368, input_hei
         if len(frames_features) == 0:
             return None
 
-        # Return mean of all frame features
-        return np.mean(frames_features, axis=0)
+        # Return sequence of frame features
+        return frames_features
 
     except Exception as e:
         import traceback
@@ -475,7 +547,7 @@ def process_video_openpose(video_path, net, hand_net, input_width=368, input_hei
 
 def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
     """
-    Prepare dataset by extracting features from videos using OpenPose
+    Prepare dataset by extracting sequence features from videos using OpenPose
     
     Args:
         wlasl_data: WLASL dataset JSON
@@ -483,7 +555,7 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
         num_classes: Number of classes to process
         
     Returns:
-        features, labels: Extracted features and corresponding labels
+        features, labels: Sequences of extracted features and corresponding labels
     """
     # Initialize OpenPose
     try:
@@ -491,9 +563,9 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
     except FileNotFoundError as e:
         print(f"OpenPose initialization failed: {e}")
         print("Please download OpenPose models and place them in the models/openpose directory.")
-        return np.array([]), np.array([])
+        return [], []
     
-    features = []
+    features = []  # Now this will be a list of sequences
     labels = []
     processed_classes = []
     
@@ -501,7 +573,7 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
     videos_dir = os.path.join(data_path, "videos")
     if not os.path.exists(videos_dir):
         print(f"Videos directory not found: {videos_dir}")
-        return np.array(features), np.array(labels)
+        return features, labels
 
     # Get list of available video files
     available_videos = {
@@ -526,17 +598,17 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
             video_id = str(entry["video_id"])
             video_path = os.path.join(videos_dir, f"{video_id}.mp4")
 
-            # Extract features with OpenPose
+            # Extract sequence of features with OpenPose
             video_features = process_video_openpose(video_path, net, hand_net, input_width, input_height)
 
             # Only add if processing was successful
-            if video_features is not None:
+            if video_features is not None and len(video_features) > 0:
+                features.append(video_features)  # Add the whole sequence
+                labels.append(class_idx)
                 class_features.append(video_features)
         
         # Only add class if it has samples
         if len(class_features) > 0:
-            features.extend(class_features)
-            labels.extend([class_idx] * len(class_features))
             processed_classes.append(class_name)
             print(f"Class {class_name}: {len(class_features)} videos processed")
     
@@ -544,11 +616,11 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
     print(f"Class names: {processed_classes}")
     print(f"Total processed videos: {len(features)}")
     
-    return np.array(features), np.array(labels)
+    return features, labels
 
 def preprocess_wlasl_dataset_openpose(data_path="data/wlasl_data", output_path="data/preprocessed", num_classes=100):
     """
-    Preprocess the WLASL dataset using OpenPose by extracting features from all videos once
+    Preprocess the WLASL dataset using OpenPose by extracting sequence features from all videos
     and saving them to disk for fast loading later.
     """
     # Create output directory
@@ -580,7 +652,7 @@ def preprocess_wlasl_dataset_openpose(data_path="data/wlasl_data", output_path="
         print("Please download OpenPose models and place them in the models/openpose directory.")
         return
     
-    # Dictionary to store features indexed by video_id
+    # Dictionary to store sequence features indexed by video_id
     videos_features = {}
     
     # Dictionary to map classes to video_ids
@@ -626,15 +698,16 @@ def preprocess_wlasl_dataset_openpose(data_path="data/wlasl_data", output_path="
             
             print(f"  Processing video {video_id}...", end=" ")
             
-            # Extract features with OpenPose
+            # Extract sequence of features with OpenPose
             video_features = process_video_openpose(video_path, net, hand_net, input_width, input_height)
             
             # Store features if processing was successful
-            if video_features is not None:
-                videos_features[video_id] = video_features.tolist()  # Convert to list for JSON serialization
+            if video_features is not None and len(video_features) > 0:
+                # Store as a list of lists (sequence of features per frame)
+                videos_features[video_id] = [frame.tolist() for frame in video_features]
                 class_to_videos[class_name].append(video_id)
                 successful_videos += 1
-                print("Success")
+                print(f"Success - {len(video_features)} frames processed")
             else:
                 print("Failed")
         
@@ -643,11 +716,11 @@ def preprocess_wlasl_dataset_openpose(data_path="data/wlasl_data", output_path="
     # Save the preprocessed data
     print("\nSaving preprocessed data...")
     
-    # Save features
-    features_path = os.path.join(output_path, "video_features.json")
+    # Save features - now this contains sequences
+    features_path = os.path.join(output_path, "video_sequence_features.json")
     with open(features_path, "w") as f:
         json.dump(videos_features, f)
-    print(f"Saved features to {features_path}")
+    print(f"Saved sequence features to {features_path}")
     
     # Save class mapping
     class_map_path = os.path.join(output_path, "class_to_videos.json")
@@ -667,13 +740,12 @@ def preprocess_wlasl_dataset_openpose(data_path="data/wlasl_data", output_path="
     print(f"Processed {processed_videos} videos across {len(class_to_videos)} classes.")
     print(f"Data saved to {output_path}")
 
-def integrated_prepare_dataset(data_path="data/wlasl_data", 
-                               num_classes=100, 
-                               use_preprocessing=True,
-                               min_videos_per_class=1):
+def integrated_prepare_sequence_dataset(data_path="data/wlasl_data", 
+                                       num_classes=100, 
+                                       use_preprocessing=True,
+                                       min_videos_per_class=1):
     """
-    Integrated function to either load preprocessed data or process videos on-the-fly
-    using OpenPose
+    Integrated function to either load preprocessed sequence data or process videos on-the-fly
     
     Args:
         data_path (str): Path to the original dataset
@@ -682,28 +754,35 @@ def integrated_prepare_dataset(data_path="data/wlasl_data",
         min_videos_per_class (int): Minimum videos per class
         
     Returns:
-        features (numpy.ndarray): Extracted features
-        labels (numpy.ndarray): Corresponding labels
+        features (list): List of sequence features
+        labels (list): Corresponding labels
     """
     preprocessed_path = os.path.join(data_path, "preprocessed")
     
-    # First check if preprocessed data exists
-    features_path = os.path.join(preprocessed_path, "video_features.json")
+    # First check if preprocessed sequence data exists
+    features_path = os.path.join(preprocessed_path, "video_sequence_features.json")
     class_map_path = os.path.join(preprocessed_path, "class_to_videos.json")
     
     if use_preprocessing and os.path.exists(features_path) and os.path.exists(class_map_path):
-        print("Loading preprocessed data...")
-        return load_preprocessed_dataset(preprocessed_path, min_videos_per_class)
+        print("Loading preprocessed sequence data...")
+        return load_preprocessed_sequence_dataset(preprocessed_path, min_videos_per_class)
+    
+    # If not found, check for old format data
+    old_features_path = os.path.join(preprocessed_path, "video_features.json")
+    if use_preprocessing and os.path.exists(old_features_path) and os.path.exists(class_map_path):
+        print("Found old format preprocessed data (non-sequence).")
+        print("Consider regenerating sequence data for better results.")
+        return load_preprocessed_sequence_dataset(preprocessed_path, min_videos_per_class)
     
     # If not, ask if user wants to preprocess
     if use_preprocessing:
-        print("Preprocessed data not found.")
+        print("Preprocessed sequence data not found.")
         choice = input("Would you like to preprocess the dataset now? (y/n): ")
         
         if choice.lower() == 'y':
             print("Starting preprocessing...")
             preprocess_wlasl_dataset_openpose(data_path, preprocessed_path, num_classes)
-            return load_preprocessed_dataset(preprocessed_path, min_videos_per_class)
+            return load_preprocessed_sequence_dataset(preprocessed_path, min_videos_per_class)
     
     # If no preprocessing, load raw data and process on-the-fly
     print("Processing videos on-the-fly (this will be slow)...")
@@ -712,27 +791,36 @@ def integrated_prepare_dataset(data_path="data/wlasl_data",
     # Check if JSON file exists
     if not os.path.exists(wlasl_data_path):
         print(f"WLASL JSON file not found at {wlasl_data_path}")
-        return np.array([]), np.array([])
+        return [], []
         
     with open(wlasl_data_path, "r") as f:
         wlasl_data = json.load(f)
         
     return prepare_dataset_openpose(wlasl_data, data_path, num_classes)
 
-def load_preprocessed_dataset(preprocessed_path="data/preprocessed", min_videos_per_class=1):
+def load_preprocessed_sequence_dataset(preprocessed_path="data/preprocessed", min_videos_per_class=1):
     """
-    Load the preprocessed dataset
+    Load the preprocessed sequence dataset
     
     Args:
         preprocessed_path (str): Path to the preprocessed data
         min_videos_per_class (int): Minimum number of videos required for a class to be included
         
     Returns:
-        features (numpy.ndarray): Extracted features
-        labels (numpy.ndarray): Corresponding labels
+        features (list): List of sequence features (each sequence is a list of frame features)
+        labels (list): Corresponding labels
     """
-    # Load features
-    features_path = os.path.join(preprocessed_path, "video_features.json")
+    # Load sequence features
+    features_path = os.path.join(preprocessed_path, "video_sequence_features.json")
+    if not os.path.exists(features_path):
+        print(f"Sequence features file not found at {features_path}")
+        # Try the old format
+        features_path = os.path.join(preprocessed_path, "video_features.json")
+        if not os.path.exists(features_path):
+            print(f"No features file found at {preprocessed_path}")
+            return [], []
+        print("Using old format features file (non-sequence data)")
+    
     with open(features_path, "r") as f:
         videos_features = json.load(f)
     
@@ -765,12 +853,16 @@ def load_preprocessed_dataset(preprocessed_path="data/preprocessed", min_videos_
         new_index = new_class_indices[class_name]
         for video_id in video_ids:
             if video_id in videos_features:
-                features.append(videos_features[video_id])
+                # Check if it's sequence data or old format
+                video_data = videos_features[video_id]
+                if isinstance(video_data[0], list):
+                    # It's already a sequence
+                    features.append(video_data)
+                else:
+                    # It's the old format (single feature vector)
+                    # Create a dummy "sequence" with one frame
+                    features.append([video_data])
                 labels.append(new_index)
-    
-    # Convert to numpy arrays
-    features_array = np.array(features)
-    labels_array = np.array(labels)
     
     print(f"Loaded {len(features)} samples from {len(valid_classes)} classes")
     
@@ -784,4 +876,160 @@ def load_preprocessed_dataset(preprocessed_path="data/preprocessed", min_videos_
         class_name = list(new_class_indices.keys())[list(new_class_indices.values()).index(idx)]
         print(f"  Class {idx} ({class_name}): {count} samples")
     
-    return features_array, labels_array
+    # Also print some sequence length stats
+    seq_lengths = [len(seq) for seq in features]
+    print(f"Sequence length stats: min={min(seq_lengths)}, max={max(seq_lengths)}, avg={sum(seq_lengths)/len(seq_lengths):.1f}")
+    
+    return features, labels
+
+def prepare_sequential_dataset(features, labels, seq_length=150, batch_size=32, test_size=0.2, 
+                            use_augmentation=True, augmentation_params=None, augmentation_factor=3):
+    """
+    Prepare sequential dataset with train/val/test split and optional augmentation
+    
+    Args:
+        features: List of sequences (each a list of frame features)
+        labels: List of class labels
+        seq_length: Maximum sequence length
+        batch_size: Batch size for data loaders
+        test_size: Proportion of data to use for testing
+        use_augmentation: Whether to apply data augmentation to training set
+        augmentation_params: Dictionary of parameters for the augmenter
+        augmentation_factor: Target multiplier for dataset size (including original data)
+        
+    Returns:
+        train_loader, val_loader, test_loader, input_dim
+    """
+    from torch.utils.data import DataLoader
+    from sklearn.model_selection import train_test_split
+    from src.data_processing.dataset import GestureSequenceDataset
+    from src.data_processing.sequence_augmenter import GestureSequenceAugmenter, AugmentedGestureSequenceDataset
+    import copy
+    import numpy as np
+    import torch
+    
+    # Determine input dimension from first frame of first sequence
+    if len(features) > 0 and len(features[0]) > 0:
+        input_dim = len(features[0][0])
+    else:
+        raise ValueError("Empty features list or sequences")
+    
+    # Print original dataset size
+    print(f"Original dataset size: {len(features)} sequences")
+    
+    # Split data
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        features, labels, test_size=test_size, random_state=42
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, test_size=test_size, random_state=42
+    )
+    
+    print(f"Train set: {len(X_train)} sequences")
+    print(f"Validation set: {len(X_val)} sequences")
+    print(f"Test set: {len(X_test)} sequences")
+    
+    # Create base datasets for validation and test
+    val_dataset = GestureSequenceDataset(X_val, y_val, seq_length=seq_length)
+    test_dataset = GestureSequenceDataset(X_test, y_test, seq_length=seq_length)
+    
+    # For training data, we have options based on augmentation
+    if use_augmentation and augmentation_factor > 1:
+        # Instead of using the complex augmentation with masks, 
+        # let's rely on the AugmentedGestureSequenceDataset which is already set up properly
+        print(f"Using on-the-fly augmentation with AugmentedGestureSequenceDataset")
+        print(f"Original train set: {len(X_train)} sequences")
+        
+        # Create the base training dataset
+        base_train_dataset = GestureSequenceDataset(X_train, y_train, seq_length=seq_length)
+        
+        # Create augmenter with custom parameters or defaults
+        if augmentation_params is None:
+            augmenter = GestureSequenceAugmenter(
+                jitter_range=0.02,
+                scale_range=(0.8, 1.2),
+                rotation_range=(-20, 20),
+                translation_range=0.1,
+                time_stretch_range=(0.75, 1.25),
+                dropout_prob=0.05,
+                swap_hands_prob=0.3,
+                mirror_prob=0.5
+            )
+        else:
+            augmenter = GestureSequenceAugmenter(**augmentation_params)
+        
+        # Instead of trying to create explicit augmented samples, 
+        # we'll use the on-the-fly approach but increase the dataset size
+        train_dataset = []
+        
+        # Add the original dataset
+        train_dataset.append(base_train_dataset)
+        
+        # Add multiple augmented versions to reach the desired size
+        for i in range(augmentation_factor - 1):
+            # Each added dataset provides on-the-fly augmentation
+            aug_dataset = AugmentedGestureSequenceDataset(
+                base_train_dataset,
+                augmenter,
+                augment_prob=1.0  # Always augment
+            )
+            train_dataset.append(aug_dataset)
+        
+        # Combine datasets using ConcatDataset
+        from torch.utils.data import ConcatDataset
+        train_dataset = ConcatDataset(train_dataset)
+        
+        print(f"Created combined dataset with {len(train_dataset)} samples")
+        print(f"Augmentation factor: {len(train_dataset) / len(X_train):.2f}x")
+    
+    elif use_augmentation:
+        # Standard on-the-fly augmentation without explicit size increase
+        # Create the base training dataset
+        base_train_dataset = GestureSequenceDataset(X_train, y_train, seq_length=seq_length)
+        
+        # Create augmenter with custom parameters or defaults
+        if augmentation_params is None:
+            augmenter = GestureSequenceAugmenter(
+                jitter_range=0.02,
+                scale_range=(0.8, 1.2),
+                rotation_range=(-20, 20),
+                translation_range=0.1,
+                time_stretch_range=(0.75, 1.25),
+                dropout_prob=0.05,
+                swap_hands_prob=0.3,
+                mirror_prob=0.5
+            )
+        else:
+            augmenter = GestureSequenceAugmenter(**augmentation_params)
+        
+        # Use on-the-fly augmentation
+        train_dataset = AugmentedGestureSequenceDataset(
+            base_train_dataset,
+            augmenter,
+            augment_prob=0.8
+        )
+        print(f"Using standard on-the-fly augmentation with augment_prob=0.8")
+    
+    else:
+        # No augmentation, just use the original training data
+        train_dataset = GestureSequenceDataset(X_train, y_train, seq_length=seq_length)
+        print("No augmentation applied")
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, 
+        num_workers=0,  # Set to 0 to avoid multiprocessing issues during debugging
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, 
+        num_workers=0,
+        pin_memory=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False, 
+        num_workers=0,
+        pin_memory=True
+    )
+    
+    return train_loader, val_loader, test_loader, input_dim
