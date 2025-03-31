@@ -9,36 +9,43 @@ class KeypointAugmenter:
     Specifically designed for hand keypoint data from OpenPose or MediaPipe
     """
     
-    def __init__(self, 
-                 jitter_range=0.02,
-                 scale_range=(0.9, 1.1),
-                 rotation_range=(-15, 15),
-                 translation_range=0.05,
-                 time_stretch_range=(0.8, 1.2),
-                 dropout_prob=0.05,
-                 swap_hands_prob=0.3,
-                 mirror_prob=0.5):
-        """
-        Initialize the KeypointAugmenter with augmentation parameters
-        
-        Args:
-            jitter_range (float): Maximum position jitter range as fraction of coordinate range
-            scale_range (tuple): Range of random scaling factors (min, max)
-            rotation_range (tuple): Range of rotation angles in degrees (min, max)
-            translation_range (float): Maximum translation range as fraction of coordinate range
-            time_stretch_range (tuple): Range of time stretching factors (min, max)
-            dropout_prob (float): Probability of dropping out individual keypoints
-            swap_hands_prob (float): Probability of swapping left and right hands
-            mirror_prob (float): Probability of mirroring keypoints horizontally
-        """
-        self.jitter_range = jitter_range
-        self.scale_range = scale_range
-        self.rotation_range = rotation_range  # in degrees
-        self.translation_range = translation_range
-        self.time_stretch_range = time_stretch_range
-        self.dropout_prob = dropout_prob
-        self.swap_hands_prob = swap_hands_prob
-        self.mirror_prob = mirror_prob
+def __init__(self, 
+             jitter_range=0.02,
+             scale_range=(0.9, 1.1),
+             rotation_range=(-15, 15),
+             translation_range=0.05,
+             time_stretch_range=(0.8, 1.2),
+             dropout_prob=0.05,
+             swap_hands_prob=0.3,
+             mirror_prob=0.5,
+             random_start_prob=0.3,
+             speed_variation_prob=0.4,
+             random_frame_drop_prob=0.3,
+             gaussian_noise_std=0.02,
+             # New parameters
+             hand_jitter_prob=0.7,
+             adaptive_resampling_prob=0.5,
+             sequential_consistency_prob=0.4):
+    """
+    Initialize the GestureSequenceAugmenter with augmentation parameters
+    """
+    self.jitter_range = jitter_range
+    self.scale_range = scale_range
+    self.rotation_range = rotation_range
+    self.translation_range = translation_range
+    self.time_stretch_range = time_stretch_range
+    self.dropout_prob = dropout_prob
+    self.swap_hands_prob = swap_hands_prob
+    self.mirror_prob = mirror_prob
+    self.random_start_prob = random_start_prob
+    self.speed_variation_prob = speed_variation_prob
+    self.random_frame_drop_prob = random_frame_drop_prob
+    self.gaussian_noise_std = gaussian_noise_std
+    
+    # New parameters
+    self.hand_jitter_prob = hand_jitter_prob
+    self.adaptive_resampling_prob = adaptive_resampling_prob
+    self.sequential_consistency_prob = sequential_consistency_prob
     
     def augment_sample(self, keypoints, is_sequence=False):
         """

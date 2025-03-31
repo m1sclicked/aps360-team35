@@ -51,20 +51,31 @@ class GestureSequenceDataset(Dataset):
             self.masks[i, :seq_len] = 1
     
     def process_sequence(self, sequence, max_length, normalize):
-    # Convert to tensor if not already
+        # Convert to tensor if not already
         if not isinstance(sequence, torch.Tensor):
             sequence = torch.FloatTensor(sequence)
         
         # Normalize if requested
         if normalize:
-            # Calculate mean and std across sequence, handling zeros
+            # More robust normalization - handle each feature dimension separately
             mask = (sequence != 0).float()
             if mask.sum() > 0:  # Only normalize if there are non-zero values
-                seq_mean = (sequence.sum(dim=0) / (mask.sum(dim=0) + 1e-8))
-                seq_std = torch.sqrt(((sequence - seq_mean)**2 * mask).sum(dim=0) / 
-                                        (mask.sum(dim=0) + 1e-8) + 1e-8)
-                sequence = (sequence - seq_mean) / seq_std
-                sequence = sequence * mask  # Keep zeros as zeros
+                # For each feature dimension
+                for dim in range(sequence.size(1)):
+                    dim_values = sequence[:, dim]
+                    dim_mask = mask[:, dim]
+                    
+                    # Only normalize if we have non-zero values in this dimension
+                    if dim_mask.sum() > 0:
+                        dim_mean = dim_values.sum() / dim_mask.sum()
+                        
+                        # Compute std with epsilon to avoid division by zero
+                        dim_var = ((dim_values - dim_mean) ** 2 * dim_mask).sum() / (dim_mask.sum() + 1e-8)
+                        dim_std = torch.sqrt(dim_var + 1e-8)
+                        
+                        # Only normalize if std is not too small
+                        if dim_std > 1e-6:
+                            sequence[:, dim] = ((dim_values - dim_mean) / dim_std) * dim_mask
         
         # Handle sequence length
         seq_len = sequence.size(0)
@@ -552,7 +563,8 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
     Args:
         wlasl_data: WLASL dataset JSON
         data_path: Path to dataset
-        num_classes: Number of classes to process
+        num_classes: Number of classes to process. If passed the number of all classes,
+                     it will process all classes.
         
     Returns:
         features, labels: Sequences of extracted features and corresponding labels
@@ -581,8 +593,13 @@ def prepare_dataset_openpose(wlasl_data, data_path, num_classes=100):
     }
     print(f"Total available videos: {len(available_videos)}")
 
+    # Limit the number of classes to process
+    # If num_classes is the same as the length of wlasl_data, it means we're processing all classes
+    classes_to_process = wlasl_data[:num_classes]
+    print(f"Processing {len(classes_to_process)} out of {len(wlasl_data)} total classes")
+
     # Process classes
-    for class_idx, sign_class in enumerate(tqdm(wlasl_data[:num_classes])):
+    for class_idx, sign_class in enumerate(tqdm(classes_to_process)):
         class_name = sign_class["gloss"]
         instances = sign_class["instances"]
         
@@ -749,7 +766,7 @@ def integrated_prepare_sequence_dataset(data_path="data/wlasl_data",
     
     Args:
         data_path (str): Path to the original dataset
-        num_classes (int): Number of classes to include
+        num_classes (int or None): Number of classes to include. If None, include all classes.
         use_preprocessing (bool): Whether to use preprocessing
         min_videos_per_class (int): Minimum videos per class
         
@@ -781,7 +798,23 @@ def integrated_prepare_sequence_dataset(data_path="data/wlasl_data",
         
         if choice.lower() == 'y':
             print("Starting preprocessing...")
-            preprocess_wlasl_dataset_openpose(data_path, preprocessed_path, num_classes)
+            # If num_classes is None, we'll determine the total number when preprocessing
+            if num_classes is None:
+                # Need to determine the total number of classes in the dataset
+                wlasl_data_path = os.path.join(data_path, "WLASL_v0.3.json")
+                if os.path.exists(wlasl_data_path):
+                    with open(wlasl_data_path, "r") as f:
+                        wlasl_data = json.load(f)
+                    print(f"Found {len(wlasl_data)} total classes in dataset")
+                    # Pass the total number of classes to preprocessing
+                    preprocess_wlasl_dataset_openpose(data_path, preprocessed_path, len(wlasl_data))
+                else:
+                    print(f"WLASL JSON file not found at {wlasl_data_path}")
+                    return [], []
+            else:
+                # Use the specified number of classes
+                preprocess_wlasl_dataset_openpose(data_path, preprocessed_path, num_classes)
+            
             return load_preprocessed_sequence_dataset(preprocessed_path, min_videos_per_class)
     
     # If no preprocessing, load raw data and process on-the-fly
@@ -795,6 +828,11 @@ def integrated_prepare_sequence_dataset(data_path="data/wlasl_data",
         
     with open(wlasl_data_path, "r") as f:
         wlasl_data = json.load(f)
+    
+    # If num_classes is None, use all classes
+    if num_classes is None:
+        print(f"Using all {len(wlasl_data)} classes from dataset")
+        num_classes = len(wlasl_data)
         
     return prepare_dataset_openpose(wlasl_data, data_path, num_classes)
 
@@ -882,7 +920,7 @@ def load_preprocessed_sequence_dataset(preprocessed_path="data/preprocessed", mi
     
     return features, labels
 
-def prepare_sequential_dataset(features, labels, seq_length=150, batch_size=32, test_size=0.2, 
+def prepare_sequential_dataset(features, labels, seq_length=150, batch_size=32, test_size=0.15, 
                             use_augmentation=True, augmentation_params=None, augmentation_factor=3):
     """
     Prepare sequential dataset with train/val/test split and optional augmentation
@@ -904,9 +942,6 @@ def prepare_sequential_dataset(features, labels, seq_length=150, batch_size=32, 
     from sklearn.model_selection import train_test_split
     from src.data_processing.dataset import GestureSequenceDataset
     from src.data_processing.sequence_augmenter import GestureSequenceAugmenter, AugmentedGestureSequenceDataset
-    import copy
-    import numpy as np
-    import torch
     
     # Determine input dimension from first frame of first sequence
     if len(features) > 0 and len(features[0]) > 0:
@@ -1019,6 +1054,216 @@ def prepare_sequential_dataset(features, labels, seq_length=150, batch_size=32, 
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True, 
         num_workers=0,  # Set to 0 to avoid multiprocessing issues during debugging
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, 
+        num_workers=0,
+        pin_memory=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False, 
+        num_workers=0,
+        pin_memory=True
+    )
+    
+    return train_loader, val_loader, test_loader, input_dim
+
+def normalize_dataset_features(features):
+    import numpy as np
+    for i in range(len(features)):
+        for j in range(len(features[i])):
+            # Normalize each frame independently
+            frame = np.array(features[i][j])
+            if np.any(frame != 0):  # Only normalize non-zero frames
+                mean = np.mean(frame[frame != 0])
+                std = np.std(frame[frame != 0])
+                if std > 1e-6:  # Avoid division by very small numbers
+                    frame = (frame - mean) / (std + 1e-6) * (frame != 0)
+                features[i][j] = frame.tolist()
+    return features
+
+def prepare_stratified_sequential_dataset(features, labels, seq_length=150, batch_size=32, 
+                                         train_size=0.7, val_size=0.15, test_size=0.15, 
+                                         use_augmentation=True, augmentation_params=None, 
+                                         augmentation_factor=3, random_state=42):
+    """
+    Prepare sequential dataset with stratified train/val/test split and optional augmentation
+    
+    Args:
+        features: List of sequences (each a list of frame features)
+        labels: List of class labels
+        seq_length: Maximum sequence length
+        batch_size: Batch size for data loaders
+        train_size: Proportion of data to use for training
+        val_size: Proportion of data to use for validation
+        test_size: Proportion of data to use for testing
+        use_augmentation: Whether to apply data augmentation to training set
+        augmentation_params: Dictionary of parameters for the augmenter
+        augmentation_factor: Target multiplier for dataset size (including original data)
+        random_state: Random seed for reproducibility
+        
+    Returns:
+        train_loader, val_loader, test_loader, input_dim
+    """
+    from src.data_processing.dataset import GestureSequenceDataset
+    from src.data_processing.sequence_augmenter import GestureSequenceAugmenter, AugmentedGestureSequenceDataset
+    from torch.utils.data import DataLoader, ConcatDataset
+    from sklearn.model_selection import train_test_split
+    from collections import Counter
+    
+    # Convert labels to numpy array if it's not already
+    labels = np.array(labels)
+    
+    # Determine input dimension from first frame of first sequence
+    if len(features) > 0 and len(features[0]) > 0:
+        input_dim = len(features[0][0])
+    else:
+        raise ValueError("Empty features list or sequences")
+    
+    # Print original dataset size
+    print(f"Original dataset size: {len(features)} sequences")
+    
+    # Count class distribution
+    class_counts = dict(Counter(labels))
+    print(f"Original class distribution:")
+    for class_idx, count in sorted(class_counts.items()):
+        print(f"  Class {class_idx}: {count} samples")
+    
+    
+    # First split: separate test set
+    X_temp, X_test, y_temp, y_test = train_test_split(
+        features, labels, 
+        test_size=test_size, 
+        random_state=random_state, 
+        stratify=labels
+    )
+    
+    # Second split: separate train and validation from remaining data
+    # Recalculate the validation proportion relative to the remaining data
+    relative_val_size = val_size / (train_size + val_size)
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_temp, y_temp, 
+        test_size=relative_val_size, 
+        random_state=random_state, 
+        stratify=y_temp
+    )
+    
+    # Convert to numpy arrays for easier manipulation
+    y_train = np.array(y_train)
+    y_val = np.array(y_val)
+    y_test = np.array(y_test)
+    
+    # Verify that the splits maintain class distribution
+    print(f"\nTrain set: {len(X_train)} sequences ({len(X_train)/len(features):.1%})")
+    train_class_counts = dict(Counter(y_train))
+    for class_idx, count in sorted(train_class_counts.items()):
+        orig_count = class_counts.get(class_idx, 0)
+        print(f"  Class {class_idx}: {count} samples ({count/orig_count:.1%} of original)")
+    
+    print(f"\nValidation set: {len(X_val)} sequences ({len(X_val)/len(features):.1%})")
+    val_class_counts = dict(Counter(y_val))
+    for class_idx, count in sorted(val_class_counts.items()):
+        orig_count = class_counts.get(class_idx, 0)
+        print(f"  Class {class_idx}: {count} samples ({count/orig_count:.1%} of original)")
+    
+    print(f"\nTest set: {len(X_test)} sequences ({len(X_test)/len(features):.1%})")
+    test_class_counts = dict(Counter(y_test))
+    for class_idx, count in sorted(test_class_counts.items()):
+        orig_count = class_counts.get(class_idx, 0)
+        print(f"  Class {class_idx}: {count} samples ({count/orig_count:.1%} of original)")
+
+    # Create base datasets for all splits
+    base_train_dataset = GestureSequenceDataset(X_train, y_train, seq_length=seq_length)
+    val_dataset = GestureSequenceDataset(X_val, y_val, seq_length=seq_length)
+    test_dataset = GestureSequenceDataset(X_test, y_test, seq_length=seq_length)
+    
+    # For training data, we have options based on augmentation
+    if use_augmentation and augmentation_factor > 1:
+        print(f"\nUsing on-the-fly augmentation with AugmentedGestureSequenceDataset")
+        print(f"Original train set: {len(X_train)} sequences")
+        
+        # Create augmenter with custom parameters or defaults
+        if augmentation_params is None:
+            # Updated default parameters to match the new defaults
+            augmenter = GestureSequenceAugmenter(
+                jitter_range=0.03,
+                scale_range=(0.7, 1.3),
+                rotation_range=(-30, 30),
+                translation_range=0.15,
+                time_stretch_range=(0.7, 1.3),
+                dropout_prob=0.1,
+                swap_hands_prob=0.4,
+                mirror_prob=0.5,
+                random_start_prob=0.4,
+                speed_variation_prob=0.5,
+                random_frame_drop_prob=0.3,
+                gaussian_noise_std=0.02,
+                hand_jitter_prob=0.7,
+                adaptive_resampling_prob=0.5,
+                sequential_consistency_prob=0.4
+            )
+        else:
+            augmenter = GestureSequenceAugmenter(**augmentation_params)
+        
+        # Create multiple augmented datasets to achieve desired augmentation factor
+        train_datasets = [base_train_dataset]  # Start with original data
+        
+        # Add augmented datasets
+        for i in range(augmentation_factor - 1):
+            aug_dataset = AugmentedGestureSequenceDataset(
+                base_train_dataset,
+                augmenter,
+                augment_prob=1.0  # Always augment for the additional sets
+            )
+            train_datasets.append(aug_dataset)
+        
+        # Combine datasets
+        train_dataset = ConcatDataset(train_datasets)
+        
+        print(f"Created combined dataset with {len(train_dataset)} samples")
+        print(f"Augmentation factor: {len(train_dataset) / len(X_train):.2f}x")
+    
+    elif use_augmentation:
+        # Standard on-the-fly augmentation
+        if augmentation_params is None:
+            # Updated default parameters to match the new defaults
+            augmenter = GestureSequenceAugmenter(
+                jitter_range=0.03,
+                scale_range=(0.7, 1.3),
+                rotation_range=(-30, 30),
+                translation_range=0.15,
+                time_stretch_range=(0.7, 1.3),
+                dropout_prob=0.1,
+                swap_hands_prob=0.4,
+                mirror_prob=0.5,
+                random_start_prob=0.4,
+                speed_variation_prob=0.5,
+                random_frame_drop_prob=0.3,
+                gaussian_noise_std=0.02,
+                hand_jitter_prob=0.7,
+                adaptive_resampling_prob=0.5,
+                sequential_consistency_prob=0.4
+            )
+        else:
+            augmenter = GestureSequenceAugmenter(**augmentation_params)
+        
+        train_dataset = AugmentedGestureSequenceDataset(
+            base_train_dataset,
+            augmenter,
+            augment_prob=0.8
+        )
+        print(f"\nUsing standard on-the-fly augmentation with augment_prob=0.8")
+    
+    else:
+        # No augmentation
+        train_dataset = base_train_dataset
+        print("\nNo augmentation applied")
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, 
+        num_workers=0,  # Adjust based on your system
         pin_memory=True
     )
     val_loader = DataLoader(

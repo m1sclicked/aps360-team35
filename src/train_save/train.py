@@ -351,14 +351,15 @@ def train_svm_model(model, train_loader, val_loader, test_loader, criterion=None
 
 def train_sequence_model(model, train_loader, val_loader, test_loader, criterion, optimizer, 
                           scheduler, num_epochs, device, early_stop_patience=15, 
-                          improvement_threshold=0.001, monitor_metric='accuracy'):
+                          improvement_threshold=0.001, monitor_metric='accuracy',
+                          l2_lambda=0.0001, l2_excluded_layers=('lstm',)):
     """
-    Train a sequence-based model with masking and metrics tracking
+    Train a sequence-based model with masking, metrics tracking, and additional L2 regularization
     
     Args:
         model: The model to train
         train_loader, val_loader, test_loader: DataLoaders
-        criterion: Loss function
+        criterion: Loss function (can be standard CrossEntropyLoss or ConfidencePenaltyLoss)
         optimizer: Optimizer
         scheduler: Learning rate scheduler (supports OneCycleLR with per-batch stepping)
         num_epochs: Maximum number of training epochs
@@ -366,6 +367,8 @@ def train_sequence_model(model, train_loader, val_loader, test_loader, criterion
         early_stop_patience: Patience for early stopping (default: 15)
         improvement_threshold: Minimum improvement required to reset patience (default: 0.001)
         monitor_metric: Metric to monitor for early stopping ('loss' or 'accuracy')
+        l2_lambda: L2 regularization strength (default: 0.0001)
+        l2_excluded_layers: Tuple of layer name substrings to exclude from L2 regularization
         
     Returns:
         Metrics and training history
@@ -399,9 +402,12 @@ def train_sequence_model(model, train_loader, val_loader, test_loader, criterion
     
     # Import metrics calculation functions
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+    import copy
     
     for epoch in range(num_epochs):
         # --- TRAIN ---
+        if hasattr(criterion, 'update_epoch'):
+            criterion.update_epoch(epoch)
         model.train()
         total_train_loss = 0
         train_preds, train_labels_list = [], []
@@ -413,7 +419,21 @@ def train_sequence_model(model, train_loader, val_loader, test_loader, criterion
             
             optimizer.zero_grad()
             outputs = model(batch_features, batch_masks)
-            loss = criterion(outputs, batch_labels)
+            
+            # Use the provided criterion (could be standard or confidence penalty)
+            # The criterion should handle the primary loss calculation
+            primary_loss = criterion(outputs, batch_labels)
+            
+            # Calculate L2 regularization loss
+            l2_reg = 0.0
+            for name, param in model.named_parameters():
+                # Only apply L2 regularization to weights and exclude specified layers
+                if 'weight' in name and not any(excluded in name for excluded in l2_excluded_layers):
+                    l2_reg += torch.norm(param, 2) ** 2
+            
+            # Combine primary loss with weighted L2 loss
+            loss = primary_loss + l2_lambda * l2_reg
+            
             loss.backward()
             
             # Gradient clipping to prevent exploding gradients
@@ -453,6 +473,8 @@ def train_sequence_model(model, train_loader, val_loader, test_loader, criterion
                 batch_labels = batch_labels.to(device)
                 
                 outputs = model(batch_features, batch_masks)
+                
+                # Use the same criterion for validation
                 loss = criterion(outputs, batch_labels)
                 total_val_loss += loss.item() * batch_labels.size(0)
                 
@@ -520,7 +542,7 @@ def train_sequence_model(model, train_loader, val_loader, test_loader, criterion
             best_metric = current_metric
             patience_counter = 0
             # Save best model
-            best_model_state = model.state_dict().copy()
+            best_model_state = copy.deepcopy(model.state_dict())
         else:
             patience_counter += 1
             print(f"No improvement in {monitor_metric}. Patience: {patience_counter}/{early_stop_patience}")
