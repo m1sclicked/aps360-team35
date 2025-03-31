@@ -571,3 +571,230 @@ def train_sequence_model(model, train_loader, val_loader, test_loader, criterion
         test_recalls,
         test_f1s,
     )
+
+def process_sequences_for_svm(features, masks, approach="average"):
+    """
+    Process sequence features for SVM training using different approaches
+    
+    Args:
+        features: Numpy array of sequence features [batch, seq_len, feature_dim]
+        masks: Numpy array of sequence masks [batch, seq_len]
+        approach: How to process sequences - "average", "flatten", etc.
+        
+    Returns:
+        processed_features: Numpy array ready for SVM [batch, feature_dim]
+    """
+    batch_size, seq_len, feature_dim = features.shape
+    
+    if approach == "average":
+        # Average each sequence over time, respecting the mask
+        processed = np.zeros((batch_size, feature_dim))
+        for i in range(batch_size):
+            # Get mask for this sequence and compute mean only over valid frames
+            valid_frames = features[i, masks[i] > 0]
+            if len(valid_frames) > 0:
+                processed[i] = np.mean(valid_frames, axis=0)
+    
+    elif approach == "flatten":
+        # Flatten the entire sequence to a single vector (may be very high-dimensional)
+        # Warning: This produces very large feature vectors!
+        processed = np.zeros((batch_size, seq_len * feature_dim))
+        for i in range(batch_size):
+            # Flatten the sequence into a single vector
+            processed[i] = features[i].flatten()
+    
+    elif approach == "first_frame":
+        # Use only the first frame of each sequence
+        processed = np.zeros((batch_size, feature_dim))
+        for i in range(batch_size):
+            if np.any(masks[i]):
+                # Get the first valid frame
+                first_valid_idx = np.where(masks[i] > 0)[0][0]
+                processed[i] = features[i, first_valid_idx]
+    
+    elif approach == "last_frame":
+        # Use only the last frame of each sequence
+        processed = np.zeros((batch_size, feature_dim))
+        for i in range(batch_size):
+            if np.any(masks[i]):
+                # Get the last valid frame
+                last_valid_idx = np.where(masks[i] > 0)[0][-1]
+                processed[i] = features[i, last_valid_idx]
+    
+    elif approach == "stats":
+        # Compute various statistics over the sequence
+        # (mean, std, min, max) for each feature
+        processed = np.zeros((batch_size, feature_dim * 4))
+        for i in range(batch_size):
+            valid_frames = features[i, masks[i] > 0]
+            if len(valid_frames) > 0:
+                mean_features = np.mean(valid_frames, axis=0)
+                std_features = np.std(valid_frames, axis=0)
+                min_features = np.min(valid_frames, axis=0)
+                max_features = np.max(valid_frames, axis=0)
+                processed[i] = np.concatenate([mean_features, std_features, min_features, max_features])
+    
+    else:
+        raise ValueError(f"Unknown approach for SVM sequence processing: {approach}")
+    
+    return processed
+
+def extract_sequence_features_for_svm(train_loader, val_loader, test_loader, approach="average"):
+    """
+    Extract features from sequence data for SVM training
+    
+    Args:
+        train_loader, val_loader, test_loader: DataLoaders with sequence data
+        approach: How to handle sequences - "average", "flatten", "first_frame",
+                  "last_frame", or "stats"
+        
+    Returns:
+        X_train, y_train, X_val, y_val, X_test, y_test: Processed data for SVM
+    """
+    import numpy as np
+    
+    # Extract data from the loaders
+    X_train, y_train = [], []
+    X_val, y_val = [], []
+    X_test, y_test = [], []
+    
+    print("Extracting features for SVM training...")
+    
+    # Process training data
+    for features, masks, labels in train_loader:
+        batch_X = process_sequences_for_svm(features.numpy(), masks.numpy(), approach)
+        X_train.append(batch_X)
+        y_train.append(labels.numpy())
+    
+    # Process validation data
+    for features, masks, labels in val_loader:
+        batch_X = process_sequences_for_svm(features.numpy(), masks.numpy(), approach)
+        X_val.append(batch_X)
+        y_val.append(labels.numpy())
+    
+    # Process test data
+    for features, masks, labels in test_loader:
+        batch_X = process_sequences_for_svm(features.numpy(), masks.numpy(), approach)
+        X_test.append(batch_X)
+        y_test.append(labels.numpy())
+    
+    # Combine batches
+    X_train = np.vstack(X_train)
+    y_train = np.concatenate(y_train)
+    X_val = np.vstack(X_val)
+    y_val = np.concatenate(y_val)
+    X_test = np.vstack(X_test)
+    y_test = np.concatenate(y_test)
+    
+    print(f"Processed data shapes - Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
+    
+    return X_train, y_train, X_val, y_val, X_test, y_test
+
+def train_svm_with_sequence_data(features, labels, train_loader, val_loader, test_loader, config):
+    """
+    Train an SVM model with sequence data by averaging or using specific features.
+    
+    Args:
+        features: List of sequence features
+        labels: List of labels
+        train_loader, val_loader, test_loader: DataLoaders with sequence data
+        config: Configuration dictionary
+        
+    Returns:
+        trained_model, metrics, and processed data for visualization
+    """
+    import numpy as np
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+    import pickle
+    import os
+    from src.models.svm_model import GestureSVM
+    
+    print("Training SVM model with sequence data...")
+    result_dir = os.path.join("results", "svm")
+    os.makedirs(result_dir, exist_ok=True)
+    
+    # Create an empty SVM model
+    model = GestureSVM(num_classes=config["num_classes"])
+    
+    # Preprocessing approach for sequence data (specified in config)
+    approach = config.get("svm_sequence_approach", "average")
+    print(f"Using '{approach}' approach for SVM with sequence data")
+    
+    # Extract and preprocess sequence data for SVM
+    X_train, y_train, X_val, y_val, X_test, y_test = extract_sequence_features_for_svm(
+        train_loader, val_loader, test_loader, approach
+    )
+    
+    # Decide if we should do grid search for hyperparameters
+    if config.get("svm_grid_search", False):
+        print("Performing grid search for SVM hyperparameters...")
+        model.grid_search(
+            X_train, y_train, 
+            X_val=X_val, y_val=y_val, 
+            X_test=X_test, y_test=y_test,
+            cv=config.get("svm_cv", 5)
+        )
+    else:
+        # Train SVM directly
+        model.fit(X_train, y_train, validation_data=(X_val, y_val), test_data=(X_test, y_test))
+    
+    # After training, get predictions and metrics
+    y_val_pred = model.predict(X_val)
+    y_test_pred = model.predict(X_test)
+    
+    # Validation metrics
+    val_accuracy = accuracy_score(y_val, y_val_pred) * 100
+    val_precision = precision_score(y_val, y_val_pred, average="weighted", zero_division=0)
+    val_recall = recall_score(y_val, y_val_pred, average="weighted", zero_division=0)
+    val_f1 = f1_score(y_val, y_val_pred, average="weighted", zero_division=0)
+    
+    # Test metrics
+    test_accuracy = accuracy_score(y_test, y_test_pred) * 100
+    test_precision = precision_score(y_test, y_test_pred, average="weighted", zero_division=0)
+    test_recall = recall_score(y_test, y_test_pred, average="weighted", zero_division=0)
+    test_f1 = f1_score(y_test, y_test_pred, average="weighted", zero_division=0)
+    
+    # Print results
+    print(f"SVM Training complete with approach '{approach}'")
+    print(f"Validation accuracy: {val_accuracy:.2f}%")
+    print(f"Test accuracy: {test_accuracy:.2f}%")
+    
+    # Save the confusion matrices
+    val_cm = confusion_matrix(y_val, y_val_pred)
+    test_cm = confusion_matrix(y_test, y_test_pred)
+    
+    # Set model attributes to be compatible with save_results function
+    model.train_losses = [0.0]
+    model.val_losses = [0.0]
+    model.val_accuracies = [val_accuracy]
+    model.test_accuracies = [test_accuracy]
+    model.val_precisions = [val_precision]
+    model.val_recalls = [val_recall]
+    model.val_f1s = [val_f1]
+    model.test_precisions = [test_precision]
+    model.test_recalls = [test_recall]
+    model.test_f1s = [test_f1]
+    
+    # Save the model pickle file separately since it may not be compatible with torch.save
+    model_path = os.path.join(result_dir, "svm_model.pkl")
+    with open(model_path, 'wb') as f:
+        pickle.dump(model, f)
+    print(f"SVM model saved to {model_path}")
+    
+    # Return metrics and data for further processing
+    return (
+        model, 
+        model.train_losses,
+        model.val_losses,
+        model.val_accuracies,
+        model.test_accuracies,
+        model.val_precisions,
+        model.val_recalls,
+        model.val_f1s,
+        model.test_precisions,
+        model.test_recalls,
+        model.test_f1s,
+        y_test,  # y_true for confusion matrix
+        y_test_pred,  # y_pred for confusion matrix
+        X_train, y_train, X_test, y_test  # Data for SVM-specific plots
+    )

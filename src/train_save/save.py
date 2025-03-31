@@ -525,3 +525,285 @@ Results saved in: {result_dir}
     
     print(f"{model_type.upper()} model results saved to {result_dir}")
     return saved_paths
+
+def create_svm_plots(X_train, y_train, X_test, y_test, y_pred, model, config, save_dir):
+    """
+    Create and save SVM-specific plots
+    
+    Args:
+        X_train, y_train: Training data
+        X_test, y_test: Test data
+        y_pred: Test predictions
+        model: Trained SVM model
+        config: Configuration dictionary
+        save_dir: Directory to save plots
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from sklearn.decomposition import PCA
+    from sklearn.metrics import confusion_matrix, precision_recall_fscore_support
+    import seaborn as sns
+    import os
+    
+    # Get timestamp for plots
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    plots_dir = os.path.join(save_dir, timestamp, "plots")
+    logs_dir = os.path.join(save_dir, timestamp, "logs")
+    os.makedirs(plots_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Get class names if available
+    class_names = config.get("class_names", [f"Class {i}" for i in range(config["num_classes"])])
+    
+    # 1. Create confusion matrix plot
+    plt.figure(figsize=(10, 8))
+    cm = confusion_matrix(y_test, y_pred)
+    
+    # Plot confusion matrix
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names,
+                yticklabels=class_names)
+    plt.title(f'SVM Confusion Matrix - {config.get("svm_sequence_approach", "average")} approach')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'confusion_matrix.png'), dpi=300)
+    plt.close()
+    
+    # Save confusion matrix data as CSV
+    cm_csv_path = os.path.join(logs_dir, f"svm_confusion_matrix.csv")
+    with open(cm_csv_path, 'w') as f:
+        # Write header with class names
+        if len(class_names) == config['num_classes']:
+            f.write("," + ",".join(class_names) + "\n")
+        else:
+            f.write("," + ",".join([f'Class {i}' for i in range(config['num_classes'])]) + "\n")
+        
+        # Write confusion matrix rows
+        for i, row in enumerate(cm):
+            if i < len(class_names):
+                f.write(f"{class_names[i]}," + ",".join(map(str, row)) + "\n")
+            else:
+                f.write(f"Class {i}," + ",".join(map(str, row)) + "\n")
+    
+    # 2. Calculate and save classification metrics per class
+    precision, recall, f1, support = precision_recall_fscore_support(y_test, y_pred)
+    
+    # Save metrics to CSV
+    metrics_per_class_path = os.path.join(logs_dir, f"svm_class_metrics.csv")
+    with open(metrics_per_class_path, 'w') as f:
+        f.write("class,precision,recall,f1_score,support\n")
+        
+        for i in range(len(precision)):
+            class_name = class_names[i] if i < len(class_names) else f"Class {i}"
+            f.write(f"{class_name},{precision[i]:.4f},{recall[i]:.4f},{f1[i]:.4f},{support[i]}\n")
+    
+    # 3. Create PCA visualization of the data and decision boundaries (if not too many classes)
+    if config["num_classes"] <= 10:  # Only for reasonable number of classes
+        plt.figure(figsize=(12, 10))
+        
+        # Apply PCA to reduce to 2 dimensions for visualization
+        pca = PCA(n_components=2)
+        X_train_pca = pca.fit_transform(X_train)
+        X_test_pca = pca.transform(X_test)
+        
+        # Create a mesh to plot the decision boundaries
+        h = 0.02  # step size in the mesh
+        x_min, x_max = X_test_pca[:, 0].min() - 1, X_test_pca[:, 0].max() + 1
+        y_min, y_max = X_test_pca[:, 1].min() - 1, X_test_pca[:, 1].max() + 1
+        xx, yy = np.meshgrid(np.arange(x_min, x_max, h),
+                             np.arange(y_min, y_max, h))
+        
+        # Train a new SVM on the PCA data for visualization
+        from sklearn.svm import SVC
+        if hasattr(model, 'pipeline') and hasattr(model.pipeline, 'named_steps') and 'svm' in model.pipeline.named_steps:
+            C = model.pipeline.named_steps['svm'].C
+            gamma = model.pipeline.named_steps['svm'].gamma
+            kernel = model.pipeline.named_steps['svm'].kernel
+        else:
+            C = 1.0
+            gamma = 'scale'
+            kernel = 'rbf'
+            
+        vis_model = SVC(C=C, gamma=gamma, kernel=kernel, probability=True)
+        vis_model.fit(X_train_pca, y_train)
+        
+        # Plot the decision boundary
+        try:
+            # This can be memory-intensive, so we'll try with a try-except
+            Z = vis_model.predict(np.c_[xx.ravel(), yy.ravel()])
+            Z = Z.reshape(xx.shape)
+            plt.contourf(xx, yy, Z, alpha=0.3, cmap=plt.cm.coolwarm)
+        except:
+            print("Skipping decision boundary plot (too memory intensive)")
+        
+        # Plot the test points
+        scatter = plt.scatter(X_test_pca[:, 0], X_test_pca[:, 1], c=y_test, 
+                   edgecolors='k', cmap=plt.cm.coolwarm)
+        
+        # Highlight misclassified points
+        misclassified = y_pred != y_test
+        plt.scatter(X_test_pca[misclassified, 0], X_test_pca[misclassified, 1], 
+                   s=100, facecolors='none', edgecolors='red', linewidths=2)
+        
+        # Add legend
+        plt.legend(handles=scatter.legend_elements()[0], labels=class_names, 
+                   title="Classes", loc="upper left")
+        
+        plt.title(f'PCA Visualization - Test Data with SVM Decision Boundaries')
+        plt.xlabel(f'Principal Component 1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
+        plt.ylabel(f'Principal Component 2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, 'pca_visualization.png'), dpi=300)
+        plt.close()
+    
+    # 4. Create a per-class accuracy plot
+    plt.figure(figsize=(10, 6))
+    
+    # Per-class accuracy
+    classes = np.unique(y_test)
+    class_acc = np.zeros(len(classes))
+    
+    # Calculate per-class accuracy
+    for i, c in enumerate(classes):
+        class_test_idx = np.where(y_test == c)[0]
+        class_acc[i] = np.sum(y_pred[class_test_idx] == c) / len(class_test_idx) * 100
+    
+    # Sort by accuracy
+    sort_idx = np.argsort(class_acc)
+    sorted_classes = classes[sort_idx]
+    sorted_acc = class_acc[sort_idx]
+    
+    # Get class names for sorted classes
+    sorted_names = [class_names[c] if c < len(class_names) else f"Class {c}" for c in sorted_classes]
+    
+    # Plot as horizontal bar chart
+    bars = plt.barh(sorted_names, sorted_acc, color='skyblue')
+    
+    # Add percentage labels
+    for i, v in enumerate(sorted_acc):
+        plt.text(v + 1, i, f"{v:.1f}%", va='center')
+    
+    plt.axvline(x=model.test_accuracies[0], color='red', linestyle='--', 
+               label=f'Overall Accuracy: {model.test_accuracies[0]:.1f}%')
+    
+    plt.xlabel('Accuracy (%)')
+    plt.title(f'SVM Per-Class Accuracy - {config.get("svm_sequence_approach", "average")} approach')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'per_class_accuracy.png'), dpi=300)
+    plt.close()
+    
+    # 5. Create a summary table as an image
+    plt.figure(figsize=(10, 6))
+    plt.axis('tight')
+    plt.axis('off')
+    
+    # Create summary data
+    summary_data = [
+        ["Metric", "Value"],
+        ["Approach", config.get("svm_sequence_approach", "average")],
+        ["Test Accuracy", f"{model.test_accuracies[0]:.2f}%"],
+        ["Test Precision", f"{model.test_precisions[0]:.4f}"],
+        ["Test Recall", f"{model.test_recalls[0]:.4f}"],
+        ["Test F1", f"{model.test_f1s[0]:.4f}"]
+    ]
+    
+    # Add SVM hyperparameters if available
+    if hasattr(model, 'pipeline') and hasattr(model.pipeline, 'named_steps') and 'svm' in model.pipeline.named_steps:
+        summary_data.append(["SVM C", str(model.pipeline.named_steps['svm'].C)])
+        summary_data.append(["SVM gamma", str(model.pipeline.named_steps['svm'].gamma)])
+        summary_data.append(["SVM kernel", model.pipeline.named_steps['svm'].kernel])
+    
+    # Create table
+    table = plt.table(cellText=summary_data, loc='center', cellLoc='left', colWidths=[0.3, 0.7])
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1, 1.5)
+    
+    plt.title("SVM Model Summary")
+    plt.savefig(os.path.join(plots_dir, 'model_summary.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 6. Create a summary JSON file
+    summary_path = os.path.join(save_dir, timestamp, "summary.json")
+    import json
+    summary = {
+        "model_type": "svm",
+        "approach": config.get("svm_sequence_approach", "average"),
+        "timestamp": timestamp,
+        "metrics": {
+            "test_accuracy": float(model.test_accuracies[0]),
+            "test_precision": float(model.test_precisions[0]),
+            "test_recall": float(model.test_recalls[0]),
+            "test_f1": float(model.test_f1s[0]),
+            "per_class_accuracy": {
+                class_names[int(c)] if int(c) < len(class_names) else f"Class_{int(c)}": float(acc) 
+                for c, acc in zip(classes, class_acc)
+            }
+        },
+        "hyperparameters": {}
+    }
+    
+    # Add SVM hyperparameters if available
+    if hasattr(model, 'pipeline') and hasattr(model.pipeline, 'named_steps') and 'svm' in model.pipeline.named_steps:
+        svm = model.pipeline.named_steps['svm']
+        summary["hyperparameters"] = {
+            "C": float(svm.C) if hasattr(svm, 'C') else None,
+            "gamma": str(svm.gamma) if hasattr(svm, 'gamma') else None,
+            "kernel": svm.kernel if hasattr(svm, 'kernel') else None
+        }
+    
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    # 7. If grid search was performed, create grid search results visualization
+    if hasattr(model, 'grid_search_results') and model.grid_search_results is not None:
+        # If we have learning curve results from grid search
+        if hasattr(model.grid_search_results, 'learning_curve_results'):
+            plt.figure(figsize=(10, 6))
+            
+            train_sizes = model.grid_search_results.learning_curve_results['train_sizes']
+            train_scores = model.grid_search_results.learning_curve_results['train_scores']
+            test_scores = model.grid_search_results.learning_curve_results['test_scores']
+            
+            # Calculate mean and std for train scores
+            train_mean = np.mean(train_scores, axis=1) * 100
+            train_std = np.std(train_scores, axis=1) * 100
+            
+            # Calculate mean and std for test scores
+            test_mean = np.mean(test_scores, axis=1) * 100
+            test_std = np.std(test_scores, axis=1) * 100
+            
+            # Plot learning curve
+            plt.plot(train_sizes, train_mean, 'o-', color='r', label='Training score')
+            plt.fill_between(train_sizes, train_mean - train_std, train_mean + train_std, 
+                            alpha=0.1, color='r')
+            
+            plt.plot(train_sizes, test_mean, 'o-', color='g', label='Cross-validation score')
+            plt.fill_between(train_sizes, test_mean - test_std, test_mean + test_std, 
+                           alpha=0.1, color='g')
+            
+            plt.xlabel('Training Examples')
+            plt.ylabel('Accuracy (%)')
+            plt.title('SVM Learning Curve')
+            plt.legend(loc='best')
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig(os.path.join(plots_dir, 'learning_curve.png'), dpi=300)
+            plt.close()
+            
+            # Add grid search results to summary
+            summary["hyperparameters"]["grid_search"] = {
+                "best_params": model.grid_search_results.best_params_,
+                "best_score": float(model.grid_search_results.best_score_ * 100),
+            }
+            
+            with open(summary_path, 'w') as f:
+                json.dump(summary, f, indent=2)
+    
+    print(f"SVM analysis and visualization saved to {save_dir}/{timestamp}")
+    return os.path.join(save_dir, timestamp)

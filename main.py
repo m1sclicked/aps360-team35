@@ -1,4 +1,5 @@
 import os
+import py_compile
 import sys
 import argparse
 import json
@@ -20,11 +21,16 @@ from src.sequence_models.bi_lstm_model import (
 )
 from src.sequence_models.enhanced_bi_lstm_model import MultiResolutionBiLSTMAttentionModelEnhanced
 from src.sequence_models.multi_temporal_cnn import MultiStageTemporalCNNModel
+from src.models.new_resnet_cnn import ResNetGesture
+from src.models.svm_model import GestureSVM
+
+# Import new temporal ResNet models
+from src.sequence_models.temporal_resnet import TemporalResNetGesture, TemporalResNetAttention
 
 # Import training and losses
 from src.losses import get_loss_function
-from src.train_save.train import train_sequence_model
-from src.train_save.save import save_results
+from src.train_save.train import train_sequence_model, train_svm_with_sequence_data
+from src.train_save.save import save_results, create_svm_plots
 
 # Import optimizer for hyperparameter tuning
 from src.hyperparameter_tuning import optimize_hyperparameters, set_seed
@@ -155,6 +161,67 @@ def train_model_with_config(features, labels, config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
+    if config["model_type"] == "svm":
+        # Special case for SVM: Use GestureSVM with sequence flattening or averaging
+        print("Training SVM model with sequence data...")
+        from src.train_save.train import train_svm_with_sequence_data
+        from src.train_save.save import create_svm_plots
+        
+        result = train_svm_with_sequence_data(
+            features, labels, train_loader, val_loader, test_loader, config
+        )
+        
+        # Unpack the returned values
+        model = result[0]
+        train_losses = result[1]
+        val_losses = result[2]
+        val_accuracies = result[3]
+        test_accuracies = result[4]
+        val_precisions = result[5]
+        val_recalls = result[6]
+        val_f1s = result[7]
+        test_precisions = result[8]
+        test_recalls = result[9]
+        test_f1s = result[10]
+        y_true = result[11]
+        y_pred = result[12]
+        X_train = result[13]
+        y_train = result[14]
+        X_test = result[15]
+        y_test = result[16]
+        
+        # Step 7: Save results - two-step process for SVM
+        print("Step 7: Saving SVM results...")
+        
+        # First use standard save_results function for compatibility with other models
+        result_dir = os.path.join("results", config["model_type"])
+        os.makedirs(result_dir, exist_ok=True)
+        
+        saved_paths = save_results(
+            model=model,
+            train_losses=train_losses,
+            val_losses=val_losses,
+            val_accuracies=val_accuracies,
+            test_accuracies=test_accuracies,
+            val_precisions=val_precisions,
+            val_recalls=val_recalls,
+            val_f1s=val_f1s,
+            test_precisions=test_precisions,
+            test_recalls=test_recalls,
+            test_f1s=test_f1s,
+            scaler=None,
+            config=config,
+            y_true=y_true,
+            y_pred=y_pred,
+            base_dir=result_dir
+        )
+        
+        # Then create additional SVM-specific plots and analysis
+        analysis_dir = create_svm_plots(X_train, y_train, X_test, y_test, y_pred, model, config, result_dir)
+        
+        print(f"SVM training complete. Results saved to {analysis_dir}")
+        return model, config
+    
     if config["model_type"] == "transformer":
         model = ASLTransformerModel(
             input_dim=input_dim,
@@ -193,6 +260,22 @@ def train_model_with_config(features, labels, config):
             num_classes=config["num_classes"],
             hidden_dim=config["hidden_dim"],
             dropout=config["dropout"]
+        ).to(device)
+    elif config["model_type"] == "resnet-temporal":
+        model = TemporalResNetGesture(
+            num_classes=config["num_classes"],
+            input_dim=input_dim,
+            seq_length=config.get("seq_length", 150),
+            pretrained=config.get("pretrained", True),
+            freeze_layers=config.get("freeze_layers", True)
+        ).to(device)
+    elif config["model_type"] == "resnet-attention":
+        model = TemporalResNetAttention(
+            num_classes=config["num_classes"],
+            input_dim=input_dim,
+            seq_length=config.get("seq_length", 150),
+            pretrained=config.get("pretrained", True),
+            freeze_layers=config.get("freeze_layers", True)
         ).to(device)
     else:
         raise ValueError(f"Unknown model type: {config['model_type']}")
@@ -298,10 +381,22 @@ def main():
     
     # Model configuration
     parser.add_argument('--model-type', type=str, 
-                        choices=['transformer', 'bilstm', 'temporalcnn'],
+                        choices=['transformer', 'bilstm', 'temporalcnn', 'resnet-temporal', 
+                                 'resnet-attention', 'svm'],
                         default='bilstm', help='Model type to use')
     parser.add_argument('--enhanced', action='store_true', 
                         help='Use enhanced BiLSTM model (only for bilstm type)')
+    parser.add_argument('--pretrained', action='store_true',
+                        help='Use pretrained ResNet backbone (for resnet models)')
+    parser.add_argument('--freeze-layers', action='store_true',
+                        help='Freeze early ResNet layers (for resnet models)')
+    
+    # SVM specific options
+    parser.add_argument('--svm-approach', type=str, 
+                        choices=['average', 'flatten', 'first_frame', 'last_frame', 'stats'],
+                        default='average', help='Approach for SVM with sequence data')
+    parser.add_argument('--svm-grid-search', action='store_true',
+                        help='Perform grid search for SVM hyperparameters')
     
     # Hyperparameter tuning options
     parser.add_argument('--trials', type=int, default=30, 
@@ -317,9 +412,17 @@ def main():
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
     parser.add_argument('--learning-rate', type=float, default=0.0003, help='Learning rate')
+    parser.add_argument('--seq-length', type=int, default=150, 
+                        help='Maximum sequence length')
     parser.add_argument('--config', type=str, help='Path to custom configuration JSON file')
     parser.add_argument('--save-dir', type=str, default='results', 
                         help='Directory to save results')
+    
+    # Data options
+    parser.add_argument('--use-augmentation', action='store_true',
+                        help='Use data augmentation')
+    parser.add_argument('--augmentation-factor', type=int, default=3,
+                        help='Target multiplier for augmented dataset size')
     
     args = parser.parse_args()
     
@@ -336,6 +439,20 @@ def main():
     custom_config["batch_size"] = args.batch_size
     custom_config["num_epochs"] = args.epochs
     custom_config["learning_rate"] = args.learning_rate
+    custom_config["seq_length"] = args.seq_length
+    custom_config["use_data_augmentation"] = args.use_augmentation
+    custom_config["augmentation_factor"] = args.augmentation_factor
+    
+    # Add ResNet specific configs
+    if args.model_type in ["resnet-temporal", "resnet-attention"]:
+        custom_config["pretrained"] = args.pretrained
+        custom_config["freeze_layers"] = args.freeze_layers
+    
+    # Add SVM specific configs
+    if args.model_type == "svm":
+        custom_config["svm_sequence_approach"] = args.svm_approach
+        custom_config["svm_grid_search"] = args.svm_grid_search
+        custom_config["num_epochs"] = 1 #dont need epoch for svm
     
     # Set enhanced model flag if specified
     if args.enhanced and args.model_type == 'bilstm':
